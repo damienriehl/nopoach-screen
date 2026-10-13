@@ -5,34 +5,30 @@ head: "6a9ed7c1dc66f9c804bf329a15d3dfbe45b82db3"
 worktree: "."
 branch: "docs/requirements-plan"
 ---
-# Handoff: no-poach screen, brainstorm done, ce-plan in progress
+# Handoff: no-poach screen, plan complete, ce-work next
 
 ## State
 
-- **Requirements plan:** `docs/plans/2026-10-13-0935-feat-no-poach-screen-plan.md` (ce-brainstorm Product Contract, committed on branch `docs/requirements-plan`).
-- **Current step:** ce-plan is enriching that same file in place. External research (data sources, flow-gap methodology, local app stack) was dispatched; the implementation units are not yet written.
+- **Plan:** `docs/plans/2026-10-13-0935-feat-no-poach-screen-plan.md`. It is implementation-ready: 15 units, document review applied, committed on branch `docs/requirements-plan`.
 - **Repo:** new and local only, with no remote yet. It is MIT-intended and must stay public-safe. Never name the collaborator, the agency or live targets.
 
-## Settled decisions (do not re-ask)
+## Decisions
 
-- **Primary user:** state AG antitrust lawyers.
-- **Order:** screen a market first, then drill into a pair.
-- **Data:** LinkedIn plus free public data; paid sources are only recommended.
-- **Distribution:** open source, run by the agency.
-- **Signals:** all three in version 1.
-- **Validation:** backtest, then a live pilot.
+- **Settled:** see the plan's Key Decisions. Data is lawful-only: free sources first, then paid sources shown with cost and provenance class. Answered in Cockpit ask `nopoach-screen-2026-10-13-1439-flow-data-source`.
+- **Open, non-blocking:** Cockpit ask `nopoach-screen-2026-10-13-1454-backtest-aggregator-data` (aggregator data for method validation only?). It gates only the real-data backtest run. Run `cockpit-answer inspect` before re-asking.
 
-## Pending decision
+## Review items not applied (awaiting approval)
 
-- **Cockpit ask `nopoach-screen-2026-10-13-1439-flow-data-source`:** research found no free, low-risk source of dated LinkedIn job histories. The options are bring-your-own data plus free sources (recommended), logged-out collection, or a paid pilot extract. Run `cockpit-answer inspect` before re-asking.
-- **Research done:** data sources, methodology and app stack. Key picks: PPML gravity baseline with Poisson changepoint and FDR; FastAPI on localhost packaged with PyInstaller onedir; DuckDB with Splink; DOCX export.
+- **Workspace purge:** delete one import, or a whole workspace, with a deletion record.
+- **Backtest availability dates:** track when each record became available, so the backtest can exclude data that wasn't available before the disclosure date.
+
+## FYI items (no decision)
+
+- **Tamper-evident log:** hash-chain the provenance log.
+- **Dense-web fitting:** leave-pair-out fitting for dense cartel webs.
+- **Occupation picker:** pick occupations by job title.
 
 ## Next
 
-1. Finish ce-plan: consolidate research, Phase 5.1.5 synthesis, write the units, run doc review, show the handoff menu.
-2. Then ce-work: Codex workers implement and the orchestrator verifies.
-
-## Open, not blocking
-
-- **Pilot market:** the collaborator chooses it (R22).
-- **Repo and product name:** `nopoach-screen` is a working name.
+1. ce-work on the plan. Codex workers implement and the orchestrator verifies by rerunning tests.
+2. Collaborator picks the pilot market (R22).
