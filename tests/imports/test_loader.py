@@ -134,3 +134,18 @@ def test_parquet_template_uses_the_documented_layout():
     table = parquet.read_table(io.BytesIO(template_parquet()))
     assert table.column_names == list(COLUMNS)
     assert table.num_rows == 0
+
+
+def test_synthetic_records_retain_synthetic_class_and_collection_method(tmp_path):
+    with Workspace.open(tmp_path / "data") as workspace:
+        result = import_records(
+            workspace, [row()], source="Synthetic demo", provenance_class="synthetic"
+        )
+        assert result.accepted_count == 1
+        assert result.rejects == ()
+        assert workspace.connection.execute(
+            "SELECT i.provenance_class, r.provenance_class, p.collection_method "
+            "FROM imports i JOIN imported_rows r ON r.import_id = i.id "
+            "JOIN provenance p ON p.id = r.provenance_id"
+        ).fetchone() == ("synthetic", "synthetic", "synthetic")
+        assert workspace.provenance.records()[0].collection_method == "synthetic"

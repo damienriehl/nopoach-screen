@@ -267,7 +267,11 @@ def _import(
         url=url,
         method="IMPORT",
         body=body,
-        collection_method="agency_import",
+        collection_method=(
+            "synthetic"
+            if classification == ProvenanceClass.SYNTHETIC
+            else "agency_import"
+        ),
     )
     import_id = str(uuid4())
     connection = workspace.connection

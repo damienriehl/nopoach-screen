@@ -26,6 +26,8 @@ import duckdb
 
 
 class ProvenanceClass(StrEnum):
+    # Test/demo data only; never a recommendable source of real observations.
+    SYNTHETIC = "synthetic"
     FIRST_PARTY_LINKEDIN = "first_party_linkedin"
     GOVERNMENT_ADMINISTRATIVE = "government_or_administrative_records"
     LICENSED_ORIGINAL = "licensed_from_original_source"
