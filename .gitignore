@@ -1,0 +1,12 @@
+.venv/
+.uv-cache/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+workspace/
+workspaces/
+*.duckdb
+*.duckdb.wal
+*.parquet
+provenance.jsonl
