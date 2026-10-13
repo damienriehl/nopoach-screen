@@ -158,6 +158,24 @@ def named_scenario(name: str) -> Scenario:
         ),
         occupations=(Occupation("29-1141", "Registered Nurse", 0.04),),
     )
+    comparisons = tuple(
+        Employer(
+            f"comparison-{i}",
+            f"Synthetic Comparison Hospital {i}",
+            1000,
+            (0, 0),
+            (1.0,),
+        )
+        for i in range(1, 5)
+    )
+    if name in {"AE1", "AE2"}:
+        # Destination shares divide hazards across all partners. Preserve the
+        # original ~40 annual moves per pair with five rather than one partner.
+        base = replace(
+            base,
+            employers=base.employers + comparisons,
+            occupations=(Occupation("29-1141", "Registered Nurse", 0.20),),
+        )
     if name == "AE1":
         return replace(
             base, pair_effects=(PairEffect("hospital-a", "hospital-b", 2020, 0.05),)
@@ -208,7 +226,9 @@ def named_scenario(name: str) -> Scenario:
                 Employer(
                     "hospital-c", "Synthetic Cedar Hospital", 1000, (0, 0), (1.0,)
                 ),
-            ),
+            )
+            + comparisons,
+            occupations=(Occupation("29-1141", "Registered Nurse", 0.24),),
             hiring_freezes=(HiringFreeze("hospital-a", 2018, 0.05),),
         )
     if name == "dense_web":
@@ -225,7 +245,8 @@ def named_scenario(name: str) -> Scenario:
         )
         return replace(
             base,
-            employers=employers,
+            employers=employers + comparisons,
+            occupations=(Occupation("29-1141", "Registered Nurse", 0.36),),
             pair_effects=tuple(
                 PairEffect(a.key, b.key, 2020, 0.05)
                 for a, b in combinations(employers, 2)

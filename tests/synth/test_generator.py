@@ -142,8 +142,19 @@ def test_dense_web_suppresses_all_large_pairs():
     assert all(effect.mutual for effect in scenario.pair_effects)
     market = generate_market(scenario, seed=42)
     assert (
-        sum(m.year >= 2020 for m in market.moves)
-        < sum(m.year < 2020 for m in market.moves) / 8
+        sum(
+            m.year >= 2020
+            for m in market.moves
+            if m.source in {f"hospital-{c}" for c in "abcdef"}
+            and m.destination in {f"hospital-{c}" for c in "abcdef"}
+        )
+        < sum(
+            m.year < 2020
+            for m in market.moves
+            if m.source in {f"hospital-{c}" for c in "abcdef"}
+            and m.destination in {f"hospital-{c}" for c in "abcdef"}
+        )
+        / 8
     )
 
 
@@ -212,3 +223,17 @@ def test_nondefault_mutual_factor_is_applied():
             / flow(market, source, destination, range(2015, 2020))
             < 0.65
         )
+
+
+@pytest.mark.parametrize("name", ["AE1", "AE2", "hiring_freeze", "dense_web"])
+def test_screening_scenarios_have_unaffected_comparison_employers(name):
+    scenario = named_scenario(name)
+    affected = {
+        key
+        for effect in scenario.pair_effects
+        for key in (effect.source, effect.destination)
+    }
+    affected.update(f.employer for f in scenario.hiring_freezes)
+    controls = [e for e in scenario.employers if e.key not in affected]
+    assert len(controls) >= 4
+    assert all(e.size == 1000 and e.occupation_shares == (1.0,) for e in controls)
