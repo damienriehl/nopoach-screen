@@ -1,0 +1,167 @@
+# Maintainer-owned seed snapshot; no prices or terms were live-verified.
+version: 1
+sources:
+  - id: state-ui-wage-records
+    name: State unemployment-insurance wage records
+    provenance_class: government_or_administrative_records
+    cost: Usually staff time plus a data-sharing agreement
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Quarterly person-employer wage histories and covered-workforce counts, including workers poorly represented in professional profiles.
+    occupations_covered_well: Broad UI-covered employment, including production and service workers; occupation codes generally require an agency-supplied crosswalk.
+    occupation_prefixes: []
+    allowed_use: leads
+    restriction: ""
+    notes: Request from the state workforce agency under 20 CFR 603; whether an AG is an eligible recipient depends on state law and the data-sharing agreement.
+    last_checked: 2026-10-13
+    source_link: https://www.ecfr.gov/current/title-20/chapter-V/part-603
+
+  - id: census-lehd
+    name: Census LEHD restricted microdata
+    provenance_class: government_or_administrative_records
+    cost: About $15,000-20,000 per project per year
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Restricted longitudinal person-employer records for method validation only.
+    occupations_covered_well: Broad UI-covered employment; occupation-specific coverage depends on approved research inputs.
+    occupation_prefixes: []
+    allowed_use: method_validation_only
+    restriction: Title 13 bars any output that identifies an employer; never use or recommend this source for enforcement leads.
+    notes: Access requires an approved project through a Federal Statistical Research Data Center; the price estimate is unverified.
+    last_checked: 2026-10-13
+    source_link: https://www.census.gov/about/adrm/fsrdc.html
+
+  - id: linkedin
+    name: LinkedIn Talent Insights and the Economic Graph program
+    provenance_class: first_party_linkedin
+    cost: quote required
+    price_verified: false
+    data_kind: aggregates
+    what_it_adds: Aggregate workforce and mobility context only, with no person-level histories; cannot directly fill missing individual worker-flow observations.
+    occupations_covered_well: Profile-based professional occupations; occupation-specific representation must be confirmed.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Obtain licensed aggregate access directly from LinkedIn; confirm product and program access terms, and do not collect profiles.
+    last_checked: 2026-10-13
+    source_link: https://business.linkedin.com/talent-solutions/talent-insights
+
+  - id: revelio
+    name: Revelio Labs
+    provenance_class: third_party_web_aggregation_unclear_or_possibly_unlawful
+    cost: About $1,250 per month for the Terminal
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Profile-derived person-level employment histories and workforce aggregates, subject to the licensed product's export scope.
+    occupations_covered_well: Profile-based professional occupations; occupation-specific representation must be confirmed.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Collection and original-source licensing are unclear; the Terminal price is unverified and does not establish access to person-level exports; an academic route goes through WRDS.
+    last_checked: 2026-10-13
+    source_link: https://www.reveliolabs.com/
+
+  - id: coresignal
+    name: Coresignal
+    provenance_class: third_party_web_aggregation_unclear_or_possibly_unlawful
+    cost: About $1,500 per month for the API
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Profile-derived person-level employment histories, subject to licensed fields and dated-history availability.
+    occupations_covered_well: Profile-based professional occupations; occupation-specific representation must be confirmed.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Collection and original-source licensing are unclear; the API price is unverified.
+    last_checked: 2026-10-13
+    source_link: https://coresignal.com/
+
+  - id: people-data-labs
+    name: People Data Labs
+    provenance_class: third_party_web_aggregation_unclear_or_possibly_unlawful
+    cost: quote required
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Person-level employment profiles and histories, subject to licensed fields and dated-history availability.
+    occupations_covered_well: Profile-based professional occupations; occupation-specific representation must be confirmed.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Collection and original-source licensing are unclear; confirm lawful provenance and historical export coverage.
+    last_checked: 2026-10-13
+    source_link: https://www.peopledatalabs.com/
+
+  - id: live-data-technologies
+    name: Live Data Technologies
+    provenance_class: third_party_web_aggregation_unclear_or_possibly_unlawful
+    cost: quote required
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Person-level job-change histories, subject to licensed fields and historical export coverage.
+    occupations_covered_well: Profile-based professional occupations; occupation-specific representation must be confirmed.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Collection and original-source licensing are unclear; confirm lawful provenance and availability for the market's years.
+    last_checked: 2026-10-13
+    source_link: https://www.livedatatechnologies.com/
+
+  - id: lightcast
+    name: Lightcast
+    provenance_class: third_party_web_aggregation_unclear_or_possibly_unlawful
+    cost: quote required
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Profile-derived employment histories and workforce aggregates, subject to the licensed product's export scope.
+    occupations_covered_well: Profile-based professional occupations; broad job-posting coverage does not establish person-level workforce coverage.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Collection and original-source licensing are unclear for person-level histories; aggregate or job-posting products alone do not supply worker moves.
+    last_checked: 2026-10-13
+    source_link: https://lightcast.io/
+
+  - id: bright-data
+    name: Bright Data
+    provenance_class: third_party_web_aggregation_unclear_or_possibly_unlawful
+    cost: quote required
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Profile-derived employment histories if dated fields are present in the licensed dataset.
+    occupations_covered_well: Profile-based professional occupations; occupation-specific representation must be confirmed.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Collection and original-source licensing are unclear; catalog listing does not authorize scraping or collection that breaches a site's terms.
+    last_checked: 2026-10-13
+    source_link: https://brightdata.com/
+
+  - id: aura
+    name: Aura
+    provenance_class: third_party_web_aggregation_unclear_or_possibly_unlawful
+    cost: quote required
+    price_verified: false
+    data_kind: person_level_histories
+    what_it_adds: Profile-derived employment histories and workforce aggregates, subject to the licensed product's export scope.
+    occupations_covered_well: Profile-based professional occupations; occupation-specific representation must be confirmed.
+    occupation_prefixes: ["11", "13", "15", "17", "19", "23", "27", "29"]
+    allowed_use: leads
+    restriction: ""
+    notes: Aura names LinkedIn as a source; collection and original-source licensing are unclear.
+    last_checked: 2026-10-13
+    source_link: https://www.getaura.ai/
+
+  - id: work-number
+    name: Equifax The Work Number
+    provenance_class: licensed_from_original_source
+    cost: quote required
+    price_verified: false
+    data_kind: payroll
+    what_it_adds: Payroll-sourced employment and income verification; not available for lead generation.
+    occupations_covered_well: Employees of participating payroll providers and employers; occupation-specific coverage is not established.
+    occupation_prefixes: []
+    allowed_use: no_leads
+    restriction: FCRA permissible-purpose limits likely bar this screening use; none for leads and never recommended for lead generation.
+    notes: Licensed from original payroll sources; listed only to explain the use restriction.
+    last_checked: 2026-10-13
+    source_link: https://theworknumber.com/
