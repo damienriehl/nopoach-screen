@@ -1,0 +1,5 @@
+RETURN_ID,FILING_TYPE,EIN,TAX_PERIOD,SUB_DATE,TAXPAYER_NAME,RETURN_TYPE,DLN,OBJECT_ID
+1,EFILE,123456789,201912,2020-05-01,Synthetic Hospital,990,synthetic,synthetic-hospital
+2,EFILE,987654321,201912,2020-05-01,Synthetic University,990,synthetic,synthetic-university
+3,EFILE,555555555,201912,2020-05-01,Synthetic Unrelated,990,synthetic,unrelated
+4,EFILE,123456789,201912,2020-05-01,Synthetic Hospital,990,synthetic,malformed

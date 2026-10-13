@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<Return xmlns="http://www.irs.gov/efile"><ReturnHeader>
+<TaxYr>2019</TaxYr><Filer><EIN>123456789</EIN><BusinessName><BusinessNameLine1Txt>Synthetic Hospital</BusinessNameLine1Txt></BusinessName></Filer>
+</ReturnHeader><ReturnData><IRS990>
+<Form990PartVIISectionAGrp><PersonNm>Robin Synthetic</PersonNm><TitleTxt>Director</TitleTxt><IndividualTrusteeOrDirectorInd>true</IndividualTrusteeOrDirectorInd></Form990PartVIISectionAGrp>
+<Form990PartVIISectionAGrp><PersonNm>Casey Synthetic</PersonNm><TitleTxt>Board Chair</TitleTxt><IndividualTrusteeOrDirectorInd>true</IndividualTrusteeOrDirectorInd><OfficerInd>true</OfficerInd></Form990PartVIISectionAGrp>
+<Form990PartVIISectionAGrp><PersonNm>Taylor Synthetic</PersonNm><TitleTxt>Chief Executive Officer</TitleTxt><OfficerInd>true</OfficerInd><KeyEmployeeInd>true</KeyEmployeeInd></Form990PartVIISectionAGrp>
+<Form990PartVIISectionAGrp><PersonNm>Jordan Synthetic</PersonNm><TitleTxt>Consultant</TitleTxt></Form990PartVIISectionAGrp>
+</IRS990></ReturnData></Return>

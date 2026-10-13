@@ -1,0 +1,3 @@
+individual_crd,person_name,firm_name,firm_crd,registration_role,branch_location,start_date,start_precision,end_date,end_precision
+900001,Alex Synthetic,Synthetic Securities,100001,Registered Representative,Synthetic City,2010-02,month,2015-05,month
+900001,Alex Synthetic,Synthetic Finance,100002,Registered Representative,Synthetic City,2015-06,month,,unknown
