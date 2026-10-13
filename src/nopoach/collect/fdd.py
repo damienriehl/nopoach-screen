@@ -11,12 +11,14 @@ configure listing URLs, an actual listing decoder, and permitted FetchClient
 hosts/rates after checking terms. No login, account or platform scraping exists.
 """
 
-import subprocess
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from html.parser import HTMLParser
+from io import BytesIO
 from urllib.parse import urljoin
+
+from pypdf import PdfReader
 
 from nopoach.collect.edgar_index import (
     CollectionReport,
@@ -97,18 +99,13 @@ def parse_document(
     """Extract all pages/attachments of a single FDD, never only Items 15/17.
 
     HTML/plaintext uses the shared full-text parser. Public portal PDFs use
-    Poppler's pdftotext (system executable, no Python dependency). Image-only
-    PDFs fail visibly rather than pretending no clause was present. OCR is not
-    part of this unit; the host can supply lawfully extracted full text instead.
+    pypdf for in-process text extraction. Image-only PDFs fail visibly rather
+    than pretending no clause was present. OCR is not part of this unit; the
+    host can supply lawfully extracted full text instead.
     """
     if body.startswith(b"%PDF-"):
-        result = subprocess.run(
-            ["pdftotext", "-layout", "-", "-"],
-            input=body,
-            capture_output=True,
-            check=True,
-        )
-        text = result.stdout.decode("utf-8").replace("\f", "\n\n")
+        reader = PdfReader(BytesIO(body))
+        text = "\n\n".join(page.extract_text() for page in reader.pages)
         if not text.strip():
             raise ValueError("FDD PDF has no extractable text; requires host OCR")
     else:

@@ -1,10 +1,16 @@
+import ast
+import inspect
 import socket
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 
 import httpx
 import pytest
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from nopoach.collect import fdd
 from nopoach.collect.fdd import PortalAdapter, PortalConfig, parse_document
 from nopoach.collect.fetch import FetchClient, FetchPolicyError
 from nopoach.market.define import Employer
@@ -125,53 +131,37 @@ def test_enabled_adapter_reads_full_listing_before_local_brand_selection(
 
 def synthetic_pdf(pages):
     """Small synthetic text PDF; the second page models an attached contract."""
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"",  # Filled after page objects are allocated.
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
-    children = []
+    writer = PdfWriter()
     for lines in pages:
-        page_id = len(objects) + 1
-        stream_id = page_id + 1
-        children.append(f"{page_id} 0 R")
-        objects.append(
-            (
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-                "/Resources << /Font << /F1 3 0 R >> >> "
-                f"/Contents {stream_id} 0 R >>"
-            ).encode()
+        page = writer.add_blank_page(width=612, height=792)
+        if not lines:
+            continue
+        font = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+            }
+        )
+        page[NameObject("/Resources")] = DictionaryObject(
+            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})}
         )
         operators = ["BT /F1 10 Tf 40 740 Td 14 TL"]
         for line in lines:
             escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
             operators.append(f"({escaped}) Tj T*")
-        stream = ("\n".join([*operators, "ET"]) + "\n").encode()
-        objects.append(
-            f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"endstream"
-        )
-    objects[1] = (
-        f"<< /Type /Pages /Count {len(pages)} /Kids [{' '.join(children)}] >>".encode()
-    )
-    body = bytearray(b"%PDF-1.4\n")
-    offsets = [0]
-    for number, obj in enumerate(objects, 1):
-        offsets.append(len(body))
-        body.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
-    xref = len(body)
-    body.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
-    for offset in offsets[1:]:
-        body.extend(f"{offset:010} 00000 n \n".encode())
-    body.extend(
-        (
-            f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\n"
-            f"startxref\n{xref}\n%%EOF\n"
-        ).encode()
-    )
-    return bytes(body)
+        stream = DecodedStreamObject()
+        stream.set_data(("\n".join([*operators, "ET"]) + "\n").encode())
+        page.replace_contents(stream)
+    body = BytesIO()
+    writer.write(body)
+    return body.getvalue()
 
 
-def test_pdf_attachment_with_person_employed_wording_is_brand_wide(tmp_path):
+def test_pdf_attachment_with_person_employed_wording_is_brand_wide(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PATH", "")
     body = synthetic_pdf(
         [
             ["Item 15: Participation. Item 17: See attached franchise agreement."],
@@ -202,3 +192,42 @@ def test_pdf_attachment_with_person_employed_wording_is_brand_wide(tmp_path):
         assert clause.pairs == (("0", "1"), ("0", "2"), ("1", "2"))
         assert clause.scope == "all employees"
         assert "Item 15" in doc.text and "Exhibit A" in doc.text
+        assert "You will not employ or seek to employ any person" in doc.text
+        assert doc.provenance == receipt
+        assert doc.filed_on == date(2020, 1, 1)
+        assert doc.form_type == "FDD"
+        assert doc.issuer == FRANCHISOR
+        assert doc.brand == "Synthetic Brand"
+
+
+def test_fdd_module_has_no_subprocess_or_pdftotext_dependency():
+    source = inspect.getsource(fdd)
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            assert all(alias.name != "subprocess" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module != "subprocess"
+    assert "pdftotext" not in source
+
+
+def test_empty_text_pdf_requires_host_ocr(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    body = synthetic_pdf([[]])
+    with Workspace.open(tmp_path / "data") as workspace:
+        receipt = workspace.provenance.append(
+            source="synthetic-fdd",
+            url="https://portal.example.invalid/empty.pdf",
+            method="GET",
+            body=body,
+        )
+        with pytest.raises(
+            ValueError,
+            match="^FDD PDF has no extractable text; requires host OCR$",
+        ):
+            parse_document(
+                body,
+                provenance=receipt,
+                filed_on=date(2020, 1, 1),
+                franchisor=FRANCHISOR,
+                brand="Synthetic Brand",
+            )
