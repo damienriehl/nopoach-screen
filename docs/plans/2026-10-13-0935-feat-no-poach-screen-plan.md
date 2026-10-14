@@ -53,7 +53,7 @@ Low flow between two firms has innocent explanations too: non-competes, differen
 - **Version 1 carries all three signals: missing flow, filed clauses, and executive and board ties.** Governs R3, R6, R7. (session-settled: user-directed — chosen over a flow screen with document evidence only: each signal catches agreements the others miss, including handshake deals between executives)
 - **Prove it with a backtest, then a live pilot.** Governs R21, R22. (session-settled: user-approved — chosen over a backtest alone or a live pilot alone: the backtest earns trust and the pilot earns relevance)
 - **The tool produces leads, never conclusions.** Its wording must survive being read aloud by opposing counsel. Governs R11.
-- **The repository holds code and method only.** Every repo may become public, so collected data, pilot results, live targets and the agency's identity stay out of git. Governs R20.
+- **The repository holds code and method only.** Collected data, workspaces and pilot results stay out of git. Governs R20. (2026-10-14 owner decision: there is no live investigation and the repository is intended to be public, so the term denylist is optional.)
 
 ### Requirements
 
@@ -89,7 +89,7 @@ Low flow between two firms has innocent explanations too: non-competes, differen
 
 - R18. The tool runs entirely on agency-controlled machines. Nothing leaves the agency except requests to public data sources.
 - R19. A lawyer can run a screen, read results and export dossiers through a point-and-click local interface, without using a command line.
-- R20. The tool is MIT-licensed open source. The published repository contains no collected data, live target names, pilot results or agency identity.
+- R20. The tool is MIT-licensed open source. The published repository contains no collected data, workspaces or pilot results. (2026-10-14 owner decision: there is no live investigation and the repository is intended to be public, so the term denylist is optional.)
 
 **Validation**
 
@@ -776,7 +776,7 @@ Units land in the order the Dependencies column sets. U1 comes first, then U3, b
 3. `README.md` covers purpose, personas, use cases, installation for lawyers and for IT, and the lawful-data stance.
 4. `docs/method.md` explains the statistics in plain language for A2 reviewers and for court.
 5. `THIRD-PARTY.md` logs every dependency and data source with license or terms.
-6. A repository scan in CI fails the build if it finds workspace files, DuckDB or Parquet files, or any term on a denylist, so data and identifying details cannot be committed. The denylist itself is never committed. CI reads it from an encrypted Actions secret, and the local pre-commit hook reads it from an untracked file outside the repository. The scan fails closed when no denylist is supplied, and never prints matched terms in logs.
+6. A repository scan in CI always fails the build if it finds prohibited data files, including workspace files, DuckDB or Parquet files, and also rejects any supplied denylist term. The denylist itself is never committed. CI optionally reads it from an encrypted Actions secret, and the local pre-commit hook optionally reads it from an untracked file outside the repository. With no denylist, term matching is skipped; a supplied but invalid denylist fails closed. The scan never prints matched terms or paths in logs. (2026-10-14 owner decision: there is no live investigation and the repository is intended to be public, so the term denylist is optional; collected data, workspaces and pilot results still never enter git.)
 7. `IT-REVIEW.md` also states the data classes a workspace may hold (including state wage records and investigative productions) and that workspaces belong on encrypted, access-controlled storage under agency policy.
 
 **Execution note:** Mostly packaging. Prove it with a smoke run of the built app on the Windows runner rather than unit tests.
@@ -784,7 +784,7 @@ Units land in the order the Dependencies column sets. U1 comes first, then U3, b
 **Test scenarios:**
 - The built Windows app starts, serves the home page on 127.0.0.1, and shuts down cleanly in CI.
 - The repository scan fails when a `.duckdb` file is staged.
-- The repository contains no denylist file, and the scan fails when the denylist secret is missing.
+- The repository contains no denylist file; clean content passes without the optional secret, prohibited data files still fail, and a supplied but invalid denylist fails closed. (2026-10-14 owner decision.)
 - The release job produces the zip, hash list and bill of materials.
 
 **Verification:** The Windows smoke job passes. The release artifacts exist and their hashes match.
@@ -808,7 +808,7 @@ Units land in the order the Dependencies column sets. U1 comes first, then U3, b
 - Every unit's verification outcome holds and every gate in the Verification Contract passes.
 - On the synthetic AE1 market, the app ranks the planted pair first, its dossier exports to Word, and the export passes the banned-phrase scan.
 - The coverage panel shows sufficiency verdicts and source recommendations with cost and provenance class for an insufficient synthetic market.
-- No collected data, workspace file, agency name or live target name exists anywhere in git history.
+- No collected data, workspace file or pilot result exists anywhere in git history. (2026-10-14 owner decision: there is no live investigation and the repository is intended to be public, so the term denylist is optional.)
 - README, `docs/method.md`, `IT-REVIEW.md` and THIRD-PARTY.md are current.
 - Abandoned or experimental code from approaches that did not pan out is removed from the diff.
 

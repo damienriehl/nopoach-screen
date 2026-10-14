@@ -94,9 +94,10 @@ checks every manifest hash, emits CycloneDX 1.6 JSON, and uses
 an inconsistent lockfile fails the build. Release checkout does not persist
 the repository write credential in Git configuration. Every third-party
 action is pinned to a full commit SHA, with its release tag in a comment.
-Repository hygiene CI fails closed when the encrypted denylist secret is absent
-and rejects data paths and confidential terms without logging matches. It
-recursively inspects gzip, zip
+Repository hygiene CI always rejects prohibited data paths without logging matches.
+The confidential-term denylist and encrypted Actions secret `NOPOACH_DENYLIST` are optional for adopters who want to keep their own confidential terms out of a fork.
+Without a denylist, term matching is skipped; a supplied path must name a readable, nonempty file outside the repository or the scan refuses.
+It recursively inspects gzip, zip
 and tar members, including nested archives and their member names. Per Git blob,
 inspection permits at most five nesting levels, 32 MiB of cumulative bytes
 (containers and expanded contents), and 1,000 archive members. Unreadable or

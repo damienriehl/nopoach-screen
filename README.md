@@ -109,24 +109,23 @@ Playwright Chromium. They are excluded from ordinary tests.
 
 ### Public-safe commits
 
-Create a private, nonempty UTF-8 file **outside** the repository with one
-confidential term per line, then set `NOPOACH_DENYLIST_PATH` to that file.
-Matching is case-insensitive in both Git paths and contents. Do not put the
-terms in shell command lines, issue reports or logs. Enable the local hook:
+The data-file guard always runs; a confidential-term denylist is optional.
+Adopters who want to keep their own confidential terms out of a fork can create a private, nonempty UTF-8 file **outside** the repository with one term per line, then set `NOPOACH_DENYLIST_PATH` to that file.
+Matching is case-insensitive in both Git paths and contents.
+Do not put the terms in shell command lines, issue reports or logs.
+Enable the local hook:
 
 ```sh
 git config core.hooksPath packaging/hooks
 python packaging/scan_repository.py
 ```
 
-The hook scans all staged file versions (including partially staged content),
-rejects workspace/export folders, generated dossiers, DuckDB, Parquet and
-provenance logs, and fails closed
-without an external nonempty denylist. It prints counts, never matching terms
-or paths. Keep Python on the hook's PATH. CI scans every reachable commit with
-`python packaging/scan_repository.py --history`; configure the encrypted Actions
-secret `NOPOACH_DENYLIST` with the same newline-separated terms. CI materializes
-it only in runner temporary storage and removes it after the scan. Missing
-secrets, including unavailable secrets on fork PRs, fail the hygiene job; a
-maintainer must run review in a trusted context. Never use `pull_request_target`
-to execute untrusted contribution code with this secret.
+The hook scans all staged file versions (including partially staged content) and rejects workspace/export folders, generated dossiers, DuckDB, Parquet and provenance logs.
+With no denylist, only term matching is skipped; a supplied path must name a readable, nonempty file outside the repository or the scan refuses.
+It prints counts, never matching terms or paths.
+Keep Python on the hook's PATH.
+CI scans every reachable commit with `python packaging/scan_repository.py --history`.
+The encrypted Actions secret `NOPOACH_DENYLIST` is optional; configure it with the same newline-separated terms if needed.
+CI materializes a nonempty secret only in runner temporary storage and removes it after the scan.
+Missing secrets, including unavailable secrets on fork PRs, skip term matching while the data-file guard still runs.
+Never use `pull_request_target` to execute untrusted contribution code with this secret.

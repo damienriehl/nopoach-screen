@@ -81,6 +81,36 @@ def history_scan(tmp_path, monkeypatch, capsys):
     return scan, repository, run
 
 
+@pytest.mark.parametrize("kind", ["zip", "tar", "tgz"])
+@pytest.mark.parametrize("name", ["workspace/rows.csv", "data.parquet"])
+def test_history_rejects_archived_data_without_denylist(
+    history_scan, monkeypatch, kind, name
+):
+    _, _, run = history_scan
+    monkeypatch.delenv("NOPOACH_DENYLIST_PATH", raising=False)
+    run(archive_bytes(kind, name, b"clean"))
+
+
+@pytest.mark.parametrize("prohibited_data", [False, True])
+def test_history_inspects_local_lfs_content_without_denylist(
+    history_scan, monkeypatch, prohibited_data
+):
+    _, repository, run = history_scan
+    monkeypatch.delenv("NOPOACH_DENYLIST_PATH", raising=False)
+    body = (
+        archive_bytes("zip", "data.parquet", b"clean") if prohibited_data else b"clean"
+    )
+    oid = hashlib.sha256(body).hexdigest()
+    obj = repository / "lfs/objects" / oid[:2] / oid[2:4] / oid
+    obj.parent.mkdir(parents=True)
+    obj.write_bytes(body)
+    pointer = (
+        "version https://git-lfs.github.com/spec/v1\n"
+        f"oid sha256:{oid}\nsize {len(body)}\n"
+    ).encode()
+    run(pointer, "rows.csv", expected=1 if prohibited_data else 0)
+
+
 @pytest.mark.parametrize("kind", ["gzip", "zip", "tar", "tgz"])
 def test_history_rejects_compressed_records_in_generic_paths(history_scan, kind):
     _, _, run = history_scan

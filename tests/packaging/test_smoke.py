@@ -31,17 +31,30 @@ def load_script(name):
     return module
 
 
-def test_scan_fails_closed_without_external_denylist(monkeypatch, capsys):
+@pytest.mark.parametrize("supplied", [None, ""])
+def test_clean_scan_passes_without_external_denylist(monkeypatch, capsys, supplied):
     scan = load_script("scan_repository")
-    monkeypatch.delenv("NOPOACH_DENYLIST_PATH", raising=False)
-    assert scan.main([]) == 1
-    assert "denylist" in capsys.readouterr().err.lower()
+    if supplied is None:
+        monkeypatch.delenv("NOPOACH_DENYLIST_PATH", raising=False)
+    else:
+        monkeypatch.setenv("NOPOACH_DENYLIST_PATH", supplied)
+    with patch.object(
+        scan, "git", side_effect=[b"src/example.py\0", b"# Synthetic Restricted Term"]
+    ):
+        assert scan.main([]) == 0
+    assert capsys.readouterr().err == (
+        "No denylist supplied; term scan skipped (data-file checks still run).\n"
+    )
 
 
+@pytest.mark.parametrize("with_denylist", [False, True])
 @pytest.mark.parametrize(
     "path",
     [
         "private.duckdb",
+        "private.duckdb.wal",
+        "provenance.jsonl",
+        "workspaces/notes.txt",
         "x.PARQUET",
         "workspace/notes.txt",
         "exports/result.docx",
@@ -49,16 +62,20 @@ def test_scan_fails_closed_without_external_denylist(monkeypatch, capsys):
     ],
 )
 def test_staged_data_is_rejected_without_printing_paths(
-    tmp_path, monkeypatch, capsys, path
+    tmp_path, monkeypatch, capsys, path, with_denylist
 ):
     scan = load_script("scan_repository")
-    denylist = tmp_path / "external.txt"
-    denylist.write_text("Synthetic Restricted Term\n")
-    monkeypatch.setenv("NOPOACH_DENYLIST_PATH", str(denylist))
+    if with_denylist:
+        denylist = tmp_path / "external.txt"
+        denylist.write_text("Synthetic Restricted Term\n")
+        monkeypatch.setenv("NOPOACH_DENYLIST_PATH", str(denylist))
+    else:
+        monkeypatch.delenv("NOPOACH_DENYLIST_PATH", raising=False)
     # Supply Git's index read results; never write this checkout's Git index.
     with patch.object(scan, "git", side_effect=[path.encode() + b"\0", b"safe"]):
         assert scan.main([]) == 1
     logs = capsys.readouterr()
+    assert "Repository scan rejected" in logs.err
     assert path not in logs.out + logs.err
 
 
@@ -86,6 +103,28 @@ def test_clean_staged_code_passes(tmp_path, monkeypatch):
         scan, "git", side_effect=[b"src/example.py\0", b"print('hello')"]
     ):
         assert scan.main([]) == 0
+
+
+def test_set_but_missing_denylist_fails_closed(tmp_path, monkeypatch, capsys):
+    scan = load_script("scan_repository")
+    denylist = tmp_path / "missing.txt"
+    monkeypatch.setenv("NOPOACH_DENYLIST_PATH", str(denylist))
+    assert scan.main([]) == 1
+    logs = capsys.readouterr()
+    assert "Repository scan refused" in logs.err
+    assert str(denylist) not in logs.out + logs.err
+
+
+def test_unreadable_denylist_fails_closed(tmp_path, monkeypatch, capsys):
+    scan = load_script("scan_repository")
+    denylist = tmp_path / "external.txt"
+    denylist.write_text("Synthetic Restricted Term\n")
+    monkeypatch.setenv("NOPOACH_DENYLIST_PATH", str(denylist))
+    with patch.object(Path, "read_text", side_effect=PermissionError):
+        assert scan.main([]) == 1
+    logs = capsys.readouterr()
+    assert "Repository scan refused" in logs.err
+    assert str(denylist) not in logs.out + logs.err
 
 
 def test_empty_or_in_repo_denylist_fails_closed(tmp_path, monkeypatch):
@@ -119,9 +158,7 @@ def test_history_scan_rejects_deleted_data_without_index_writes(tmp_path, monkey
         check=True,
         capture_output=True,
     )
-    denylist = tmp_path / "external.txt"
-    denylist.write_text("Synthetic Restricted Term\n")
-    monkeypatch.setenv("NOPOACH_DENYLIST_PATH", str(denylist))
+    monkeypatch.delenv("NOPOACH_DENYLIST_PATH", raising=False)
     monkeypatch.setattr(scan, "ROOT", repository)
     assert scan.main(["--history"]) == 1
     assert not (repository / "index").exists()

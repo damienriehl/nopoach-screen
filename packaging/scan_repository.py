@@ -178,26 +178,31 @@ def main(argv: list[str] | None = None) -> int:
         "--history", action="store_true", help="scan all reachable commits"
     )
     args = parser.parse_args(argv)
-    try:
-        supplied = os.environ.get("NOPOACH_DENYLIST_PATH", "")
-        if not supplied:
-            raise ValueError
-        denylist = Path(supplied).expanduser().resolve(strict=True)
-        if denylist.is_relative_to(ROOT):
-            raise ValueError
-        terms = [
-            term.strip().casefold()
-            for term in denylist.read_text(encoding="utf-8").splitlines()
-            if term.strip()
-        ]
-        if not terms:
-            raise ValueError
-    except (OSError, ValueError, UnicodeError):
+    terms: list[str] = []
+    supplied = os.environ.get("NOPOACH_DENYLIST_PATH", "")
+    if not supplied:
         print(
-            "Repository scan refused: external nonempty denylist required.",
+            "No denylist supplied; term scan skipped (data-file checks still run).",
             file=sys.stderr,
         )
-        return 1
+    else:
+        try:
+            denylist = Path(supplied).expanduser().resolve(strict=True)
+            if denylist.is_relative_to(ROOT):
+                raise ValueError
+            terms = [
+                term.strip().casefold()
+                for term in denylist.read_text(encoding="utf-8").splitlines()
+                if term.strip()
+            ]
+            if not terms:
+                raise ValueError
+        except (OSError, ValueError, UnicodeError):
+            print(
+                "Repository scan refused: external nonempty denylist required.",
+                file=sys.stderr,
+            )
+            return 1
 
     violations = 0
     seen: set[tuple[str, bytes]] = set()
