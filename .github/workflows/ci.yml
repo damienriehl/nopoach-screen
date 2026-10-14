@@ -1,0 +1,73 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Scan repository history (fails closed without secret)
+        shell: bash
+        env:
+          NOPOACH_DENYLIST: ${{ secrets.NOPOACH_DENYLIST }}
+        run: |
+          umask 077
+          export NOPOACH_DENYLIST_PATH="$RUNNER_TEMP/nopoach-denylist.txt"
+          trap 'rm -f "$NOPOACH_DENYLIST_PATH"' EXIT
+          printf '%s' "$NOPOACH_DENYLIST" > "$NOPOACH_DENYLIST_PATH"
+          unset NOPOACH_DENYLIST
+          python packaging/scan_repository.py --history
+  checks:
+    needs: hygiene
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - name: Install runtime, development and build tools
+        run: |
+          uv venv --python 3.12
+          uv pip install --python .venv -r pyproject.toml --group dev --group build
+      - name: Lint, format, types and tests
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+          uv run --no-sync mypy src
+          uv run --no-sync pytest
+      - name: Build Windows one-folder release
+        if: runner.os == 'Windows'
+        run: uv run --no-sync python packaging/build.py --output release
+      - name: Smoke built Windows executable on loopback
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:NOPOACH_EXECUTABLE = (Resolve-Path release/nopoach-screen/nopoach-screen.exe).Path
+          uv run --no-sync pytest -m live tests/packaging/test_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: windows-review-build
+          if-no-files-found: error
+          path: |
+            release/nopoach-screen.zip
+            release/SHA256SUMS.txt
+            release/bom.cdx.json
+            release/IT-REVIEW.md
