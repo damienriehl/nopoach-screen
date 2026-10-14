@@ -178,6 +178,12 @@ live pilot await lawfully supplied person-level records. Synthetic scenarios
 exercise planted mutual suppression, one-way suppression and thin coverage,
 but do not demonstrate sensitivity, specificity or field accuracy.
 
+Person-level histories for those historical markets may come from third-party
+aggregators whose collection is unclear. Such data is used only to validate the
+method in historical backtests. It never feeds a live screen or lead, and any
+backtest result reported from it names the vendor, the dataset and its
+provenance class.
+
 Before using a lead to justify agency process, a lawyer must evaluate source
 lawfulness and completeness, identity and market choices, alternative
 explanations, and the cited underlying evidence. The screen is one input to

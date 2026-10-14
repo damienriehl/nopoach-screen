@@ -17,7 +17,7 @@ execution: code
 - **Product authority:** Damien Riehl, building with an antitrust attorney at a state enforcement agency who is the first user. The collaborator and the agency stay unnamed in this repository. The Product Contract wins on behavior; Key Technical Decisions win on mechanism.
 - **Stop conditions:** Stop and ask before any spending, including buying a data extract or a code-signing certificate. Also stop before any collection path that logs into a platform, uses an account, or breaches a site's terms. If a free source's terms forbid the planned use, drop that source and record why rather than working around it.
 - **Execution profile:** Codex workers implement units. The orchestrating session verifies each unit by rerunning tests and inspecting artifacts. Real-data backtests and the live pilot wait on data that lawful channels supply (R21, R22).
-- **Open blockers:** None for implementation. Running the backtest on real historical cases needs person-level data for those markets, which is a spending decision for Damien (see Open Questions).
+- **Open blockers:** None for implementation. Running the backtest on real historical cases needs person-level data for those markets. Aggregator data is allowed for that validation only (see Open Questions), and buying it is a spending decision for Damien.
 
 ---
 
@@ -814,7 +814,7 @@ Units land in the order the Dependencies column sets. U1 comes first, then U3, b
 
 ## Open Questions
 
-- **Real-data backtest needs person-level data for the historical markets, and the likely sources are third-party aggregators.** Free data covers only the clause and tie signals for those cases. For 2005-2009 engineering and animation histories, the realistic sources are aggregators the catalog labels unclear collection, and state wage records carry no occupation and may not reach back that far. Damien decides whether aggregator data may be used for method validation only, kept apart from live leads and disclosed in the method note. If not, the backtest success bar covers the clause and tie signals plus synthetic validation of the flow signal. Either way, buying data is spending and needs his yes. It does not block implementation.
+- **Resolved 2026-10-14: aggregator data is for method validation only, and disclosed** (ask `nopoach-screen-2026-10-13-1454-backtest-aggregator-data`). The real-data backtest needs person-level histories for the 2005-2009 engineering and animation markets, and the realistic sources are aggregators the catalog labels unclear collection. Damien chose to allow aggregator data for historical backtests only. It never feeds live leads, and `docs/method.md` names the validation data's source. Buying it is spend and still needs his separate yes once quotes come in. It does not block implementation.
 - **Pilot market.** The collaborator chooses it (R22).
 - **Final product and repository name.** `nopoach-screen` is a working name.
 

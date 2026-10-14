@@ -32,6 +32,7 @@ branch: "docs/requirements-plan"
 - Company headcount extraction from 10-K and Form 990 filings (coverage takes counts as inputs today).
 - Review residual risks: duplicate positions when a collector runs again, a torn final provenance line blocking workspace open, and per-screen in-memory copies with no size guard.
 - Record-availability dating for backtests.
+- A guard that keeps aggregator-class (validation-only) data out of live screens, so the method-note commitment is enforced in code rather than by policy alone.
 
 ## Lessons for the next ce-work run
 
