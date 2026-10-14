@@ -68,3 +68,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nopoach"]
+
+[tool.uv]
+# Matches uv.lock and the tested offline wheelhouse; move deliberately with `uv lock`.
+exclude-newer = "2026-10-13T14:50:00Z"
