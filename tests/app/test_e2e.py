@@ -121,6 +121,9 @@ def coverage_layout(page):
         "region", name="Workforce coverage by employer and year", exact=True
     )
     expect(region).to_have_attribute("tabindex", "0")
+    assert region.locator("caption").evaluate(
+        "element => parseFloat(getComputedStyle(element).paddingLeft) > 0"
+    )
     region.focus()
     expect(region).to_be_focused()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")

@@ -28,6 +28,189 @@ def wait_screen(client):
     pytest.fail("Background screen did not finish")
 
 
+def preview_id(response):
+    from lxml import html
+
+    identifiers = html.fromstring(response.text).xpath(
+        "//form[@action='/imports']/input[@name='upload_id']/@value"
+    )
+    assert len(identifiers) == 1
+    assert identifiers[0]
+    return identifiers[0]
+
+
+def preview_worker(client, worker):
+    body = (
+        "worker,employer_name,title,location,start_date,start_precision,end_date,end_precision\n"
+        f"{worker},Synthetic A,Registered nurse,Fixture,2015,year,2024,year\n"
+    )
+    return client.post(
+        "/imports/preview",
+        files={"file": (f"{worker}.csv", body)},
+        headers={"origin": "http://127.0.0.1:8765"},
+    )
+
+
+def test_older_upload_tab_imports_its_own_bytes_and_metadata(client, tmp_path):
+    import json
+
+    root = open_workspace(client, tmp_path)
+    first = preview_worker(client, "synthetic-tab-a")
+    second = preview_worker(client, "synthetic-tab-b")
+    for preview, source in ((first, "Synthetic tab A"), (second, "Synthetic tab B")):
+        response = client.post(
+            "/imports",
+            data={
+                "upload_id": preview_id(preview),
+                "source": source,
+                "provenance_class": "synthetic",
+                "map_person_key": "worker",
+            },
+            headers={"origin": "http://127.0.0.1:8765"},
+        )
+        assert response.status_code == 200
+        with Workspace.open(root) as workspace:
+            rows = workspace.connection.execute(
+                "SELECT raw_json FROM imported_rows WHERE source = ?", [source]
+            ).fetchall()
+        assert [json.loads(row[0])["worker"] for row in rows] == [
+            "synthetic-tab-a" if source == "Synthetic tab A" else "synthetic-tab-b"
+        ]
+    assert preview_id(first) != preview_id(second)
+
+
+@pytest.mark.parametrize("identifier", [None, "expired-preview-id"])
+def test_missing_or_stale_upload_id_cannot_import_newer_preview(
+    client, tmp_path, identifier
+):
+    root = open_workspace(client, tmp_path)
+    preview_worker(client, "synthetic-current")
+    data = {
+        "source": "Synthetic stale tab",
+        "provenance_class": "synthetic",
+        "map_person_key": "worker",
+    }
+    if identifier is not None:
+        data["upload_id"] = identifier
+    response = client.post(
+        "/imports", data=data, headers={"origin": "http://127.0.0.1:8765"}
+    )
+    assert response.status_code == 400
+    with Workspace.open(root) as workspace:
+        assert (
+            workspace.connection.execute(
+                "SELECT count(*) FROM imports WHERE source = 'Synthetic stale tab'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_import_rechecks_idle_after_awaiting_form(client, tmp_path):
+    from starlette.requests import Request
+
+    root = open_workspace(client, tmp_path)
+    preview = preview_worker(client, "synthetic-delayed")
+    original_form = Request.form
+
+    async def form_with_screen_start(request, *args, **kwargs):
+        form = await original_form(request, *args, **kwargs)
+        client.app.state.session.status = "Collecting"
+        return form
+
+    with patch.object(Request, "form", form_with_screen_start):
+        response = client.post(
+            "/imports",
+            data={
+                "upload_id": preview_id(preview),
+                "source": "Synthetic delayed import",
+                "provenance_class": "synthetic",
+                "map_person_key": "worker",
+            },
+            headers={"origin": "http://127.0.0.1:8765"},
+        )
+    assert response.status_code == 409
+    with Workspace.open(root) as workspace:
+        assert (
+            workspace.connection.execute(
+                "SELECT count(*) FROM imports WHERE source = 'Synthetic delayed import'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_successful_collector_retry_clears_old_scoring_failure(client, tmp_path):
+    attempts = []
+
+    def collector(workspace, market):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("Synthetic collector failure")
+
+    open_workspace(client, tmp_path)
+    client.app.state.session.collectors = {"Synthetic index": collector}
+    with patch(
+        "nopoach.app.routes.pages.run_screen",
+        side_effect=RuntimeError("Synthetic scoring failure"),
+    ):
+        run_market(client)
+        wait_screen(client)
+    assert client.app.state.session.failures == {
+        "Synthetic index": "Synthetic collector failure",
+        "Screen scoring": "Synthetic scoring failure",
+    }
+    client.post(
+        "/screen/retry",
+        data={"source": "Synthetic index"},
+        headers={"origin": "http://127.0.0.1:8765"},
+    )
+    response = wait_screen(client)
+    assert client.app.state.session.status == "Insufficient"
+    assert client.app.state.session.failures == {}
+    assert "Synthetic scoring failure" not in response.text
+    assert attempts == [1, 1]
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        (
+            ("flow", "clauses", "ties"),
+            "Missing worker flow; Filed employee restriction; "
+            "Executive and board ties.",
+        ),
+        (("flow",), "Missing worker flow."),
+        (("clauses", "ties"), "Filed employee restriction; Executive and board ties."),
+    ],
+)
+def test_partial_banner_separates_signal_list_from_review(
+    client, tmp_path, keys, expected
+):
+    from lxml import html
+
+    from nopoach.market.sufficiency import Verdict
+
+    open_workspace(client, tmp_path)
+    run_market(client)
+    wait_screen(client)
+    session = client.app.state.session
+    session.result = replace(
+        session.result,
+        sufficiency=replace(
+            session.result.sufficiency,
+            **{
+                key: Verdict("insufficient" if key in keys else "sufficient", "Fixture")
+                for key in ("flow", "clauses", "ties")
+            },
+        ),
+    )
+    banner = (
+        html.fromstring(client.get("/screen").text)
+        .xpath("//p[@role='status' and @class='caution']")[0]
+        .text_content()
+    )
+    assert f"Insufficient signals: {expected} Review coverage" in banner
+
+
 def test_security_and_one_time_token():
     app = create_app(port=8765, token="synthetic-session")
     with TestClient(app, base_url="http://127.0.0.1:8765") as browser:
@@ -155,11 +338,17 @@ def test_import_rejects_rerun_partial_and_dossier(client, tmp_path):
     assert "Unreliable pairs" in response.text
     assert "insufficient" in response.text
     assert "government or administrative records" in response.text
-    # U10 keeps independent ties visible; U12 must still isolate unreliable pairs.
-    assert (
-        "Synthetic A / Synthetic B"
-        not in response.text.split('<details id="unreliable">')[0]
-    )
+    # Independent ties remain ranked even when worker flow is unreliable.
+    ranked = html.fromstring(response.text).xpath("(//table)[1]/tbody/tr")
+    assert len(ranked) == 1
+    assert set(ranked[0].xpath("./th/a/text()")[0].split(" / ")) == {
+        "Synthetic A",
+        "Synthetic B",
+    }
+    assert "✓ Ties" in ranked[0].text_content()
+    assert ranked[0].xpath("./td[last()]/text()") == ["Flow unreliable"]
+    assert "Mutual leads (1)" in response.text
+    assert "No pairs met the flagging threshold" not in response.text
     confirmed = client.app.state.session.market.employer_ids
     assert client.get("/screen/accept").status_code == 200
     response = client.post(
@@ -201,6 +390,7 @@ def test_import_rejects_rerun_partial_and_dossier(client, tmp_path):
     response = client.post(
         "/imports",
         data={
+            "upload_id": preview_id(response),
             "source": "Synthetic supplemental",
             "provenance_class": "government_or_administrative_records",
             "map_person_key": "worker",
@@ -288,11 +478,16 @@ def test_one_way_tab_excludes_mutual(client, tmp_path):
     from nopoach.rank import wording
 
     one_way = replace(pair, label=wording.ONE_WAY_LABEL)
-    client.app.state.session.result = replace(
-        result, mutual=(), one_way=(one_way,), unreliable=()
+    client.app.state.session.result = replace(result, mutual=(), one_way=(one_way,))
+    assert (
+        "Synthetic A / Synthetic B"
+        not in client.get("/screen").text.split('<details id="unreliable">')[0]
     )
-    assert "Synthetic A / Synthetic B" not in client.get("/screen").text
-    assert wording.ONE_WAY_LABEL in client.get("/screen?tab=one-way").text
+    response = client.get("/screen?tab=one-way")
+    assert wording.ONE_WAY_LABEL in response.text
+    assert "One-way (1)" in response.text
+    assert "Flow unreliable" in response.text
+    assert "No pairs met the flagging threshold" not in response.text
 
 
 def test_market_validation(client, tmp_path):
@@ -623,16 +818,20 @@ def test_import_requires_source_and_provenance(client, tmp_path):
         "synthetic-new,Synthetic A,Registered nurse,Fixture,2015,year,2024,year\n"
     )
     headers = {"origin": "http://127.0.0.1:8765"}
-    client.post(
+    preview = client.post(
         "/imports/preview", files={"file": ("synthetic.csv", body)}, headers=headers
     )
     missing_class = client.post(
-        "/imports", data={"source": "Synthetic import"}, headers=headers
+        "/imports",
+        data={"upload_id": preview_id(preview), "source": "Synthetic import"},
+        headers=headers,
     )
     assert missing_class.status_code == 400
     assert "Choose a provenance class" in missing_class.text
     missing_source = client.post(
-        "/imports", data={"provenance_class": "synthetic"}, headers=headers
+        "/imports",
+        data={"upload_id": preview_id(preview), "provenance_class": "synthetic"},
+        headers=headers,
     )
     assert missing_source.status_code == 400
     assert "A source name is required" in missing_source.text
@@ -640,6 +839,8 @@ def test_import_requires_source_and_provenance(client, tmp_path):
 
 def test_clause_dossier_includes_filing_and_text_record(client, tmp_path):
     from datetime import date
+
+    from lxml import html
 
     from nopoach.market.define import Employer
     from nopoach.signals.clauses import ClauseDocument, store_document
@@ -668,7 +869,12 @@ def test_clause_dossier_includes_filing_and_text_record(client, tmp_path):
             employers,
         )
     run_market(client)
-    wait_screen(client)
+    response = wait_screen(client)
+    ranked = html.fromstring(response.text).xpath("(//table)[1]/tbody/tr")
+    assert len(ranked) == 1
+    assert "✓ Clauses" in ranked[0].text_content()
+    assert ranked[0].xpath("./td[last()]/text()") == ["Flow unreliable"]
+    assert "No pairs met the flagging threshold" not in response.text
     pair = client.app.state.session.result.unreliable[0].pair
     dossier = client.get(f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}")
     assert "neither party shall hire" in dossier.text

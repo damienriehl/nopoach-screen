@@ -33,6 +33,14 @@ templates.env.globals["wording"] = wording
 
 
 @dataclass
+class UploadPreview:
+    body: bytes
+    suffix: str
+    columns: list[str]
+    suggested: dict[str, str]
+
+
+@dataclass
 class Session:
     folder: Path | None = None
     market: Market | None = None
@@ -47,10 +55,8 @@ class Session:
     executor: ThreadPoolExecutor = field(
         default_factory=lambda: ThreadPoolExecutor(max_workers=1)
     )
-    upload: bytes | None = None
-    suffix: str = ".csv"
-    columns: list[str] = field(default_factory=list)
-    suggested: dict[str, str] = field(default_factory=dict)
+    uploads: dict[str, UploadPreview] = field(default_factory=dict)
+    upload_id: str | None = None
     import_result: ImportResult | None = None
     import_source: str = ""
 
@@ -85,6 +91,7 @@ class Session:
                 self.result = run_screen(
                     workspace, market, accept_partial=accept_partial
                 )
+                self.failures.pop("Screen scoring", None)
             self.status = self._finished_status(self.result, accept_partial)
             self.progress = "Screen finished. Review coverage and sufficiency."
         except Exception as exc:
@@ -116,6 +123,8 @@ def page(
             "session": session,
             "result": session.result,
             "market": session.market,
+            "upload_id": session.upload_id,
+            "upload": session.uploads.get(session.upload_id or ""),
             **context,
         },
         status_code=status_code,
@@ -185,7 +194,8 @@ async def choose_workspace(request: Request) -> HTMLResponse:
             root = workspace.root
         session.folder, session.employers = root, employers
         session.market, session.result = None, None
-        session.upload, session.import_result = None, None
+        session.uploads.clear()
+        session.upload_id, session.import_result = None, None
         session.failures = {}
         session.status = "Empty"
     except (ValueError, OSError) as exc:
@@ -285,12 +295,16 @@ def screen(
         (r.pair.employer_a_id, r.pair.employer_b_id) for r in result.unreliable
     }
     candidates = result.one_way if tab == "one-way" else result.mutual
-    reliable = [
-        p for p in candidates if (p.employer_a_id, p.employer_b_id) not in unreliable
-    ]
+
+    def visible(pair: RankedPair) -> bool:
+        return (pair.employer_a_id, pair.employer_b_id) not in unreliable or any(
+            s.fired for s in pair.signals if s.key != "flow"
+        )
+
+    visible_pairs = [p for p in candidates if visible(p)]
     filtered = [
         p
-        for p in reliable
+        for p in visible_pairs
         if (not signal or signal in p.fired_signals)
         and (
             not employer
@@ -318,13 +332,10 @@ def screen(
         page_number=page_number,
         pages=pages,
         count=count,
-        flagged=any(p.fired_signals for p in reliable),
-        mutual_count=sum(
-            (p.employer_a_id, p.employer_b_id) not in unreliable for p in result.mutual
-        ),
-        one_way_count=sum(
-            (p.employer_a_id, p.employer_b_id) not in unreliable for p in result.one_way
-        ),
+        unreliable_keys=unreliable,
+        flagged=any(p.fired_signals for p in visible_pairs),
+        mutual_count=sum(visible(p) for p in result.mutual),
+        one_way_count=sum(visible(p) for p in result.one_way),
     )
 
 
@@ -394,17 +405,20 @@ async def preview_import(request: Request) -> HTMLResponse:
             raise ValueError("Choose a CSV or Parquet file")
         if len(columns) != len(set(columns)):
             raise ValueError("Duplicate input column names")
-        session.upload, session.suffix, session.columns = body, suffix, columns
         # Use the import mapper; missing/ambiguous mappings remain editable.
         try:
-            session.suggested = column_mapping(columns)
+            suggested = column_mapping(columns)
         except ValueError:
-            session.suggested = {
+            suggested = {
                 c: c
                 if c in columns
                 else next((a for a in VENDOR_ALIASES.get(c, ()) if a in columns), "")
                 for c in (*COLUMNS, "cbsa", "latitude", "longitude")
             }
+        session.upload_id = str(uuid4())
+        session.uploads[session.upload_id] = UploadPreview(
+            body, suffix, columns, suggested
+        )
         session.import_result = None
     except (ValueError, StopIteration, UnicodeError) as exc:
         return page(
@@ -422,11 +436,16 @@ async def preview_import(request: Request) -> HTMLResponse:
 @router.post("/imports")
 async def load_import(request: Request) -> HTMLResponse:
     session = state(request)
-    folder = idle(session)
+    idle(session)
     form = await request.form()
+    folder = idle(session)
+    upload_id = str(form.get("upload_id", ""))
+    upload = session.uploads.get(upload_id)
     try:
-        if session.upload is None:
-            raise ValueError("Choose and map a file first")
+        if upload is None:
+            raise ValueError(
+                "Upload preview is missing or stale. Choose and map a file first"
+            )
         source = str(form.get("source", ""))
         classification = str(form.get("provenance_class", ""))
         mapping = {
@@ -435,8 +454,8 @@ async def load_import(request: Request) -> HTMLResponse:
             if str(k).startswith("map_") and v
         }
         with TemporaryDirectory(prefix="nopoach-import-") as temporary:
-            path = Path(temporary) / ("upload" + session.suffix)
-            path.write_bytes(session.upload)
+            path = Path(temporary) / ("upload" + upload.suffix)
+            path.write_bytes(upload.body)
             with Workspace.open(folder) as workspace:
                 session.import_result = import_file(
                     workspace,
@@ -449,7 +468,9 @@ async def load_import(request: Request) -> HTMLResponse:
                     "SELECT id, name FROM employers ORDER BY name"
                 ).fetchall()
         session.import_source = source
-        session.upload = None
+        session.uploads.pop(upload_id)
+        if session.upload_id == upload_id:
+            session.upload_id = None
         if session.market is not None:
             session.start()
     except ValueError as exc:
@@ -461,6 +482,8 @@ async def load_import(request: Request) -> HTMLResponse:
             fields=COLUMNS,
             error=str(exc),
             status_code=400,
+            upload_id=upload_id,
+            upload=upload,
         )
     return page(
         request,
