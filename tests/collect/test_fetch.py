@@ -8,7 +8,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 
-from nopoach.collect.fetch import FetchClient, FetchPolicyError, OfflineError
+from nopoach.collect.fetch import (
+    FetchClient,
+    FetchPolicyError,
+    OfflineError,
+    _RateBudget,
+)
 from nopoach.store.provenance import ProvenanceLog
 
 CONTACT = "public-data-contact@example.invalid"
@@ -64,6 +69,26 @@ def test_fetch_logs_before_caller_parses(tmp_path):
         assert result.provenance.sha256 == sha256(body).hexdigest()
         assert result.provenance.method == "GET"
         assert json.loads(result.body) == {"synthetic": True}
+
+
+def test_rate_budget_wait_sleeps_again_after_early_wakeup(monkeypatch):
+    now = 0.0
+    delays = []
+
+    def sleep(delay):
+        nonlocal now
+        delays.append(delay)
+        now += delay / 2 if len(delays) == 1 else delay
+
+    monkeypatch.setattr("nopoach.collect.fetch.time.monotonic", lambda: now)
+    monkeypatch.setattr("nopoach.collect.fetch.time.sleep", sleep)
+    budget = _RateBudget()
+    budget.last_completed = 0.0
+
+    budget.wait(10)
+
+    assert delays == pytest.approx([0.1, 0.05])
+    assert now - budget.last_completed >= 0.1
 
 
 def test_sec_requests_share_rate_budget_across_clients_and_hosts(tmp_path):

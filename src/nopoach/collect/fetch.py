@@ -52,8 +52,10 @@ class _RateBudget:
     def wait(self, rate: float) -> None:
         if self.last_completed is not None:
             remaining = 1 / rate - (time.monotonic() - self.last_completed)
-            if remaining > 0:
+            # Sleep may wake early relative to the monotonic clock on Windows.
+            while remaining > 0:
                 time.sleep(remaining)
+                remaining = 1 / rate - (time.monotonic() - self.last_completed)
 
 
 # All client instances share budgets, including across SEC subdomains. A host
