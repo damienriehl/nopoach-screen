@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"selfRequestsOnly":true}'>
+<title>{{ title }} · Labor market screen</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script><script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header><a href="/">Labor market screen</a><nav aria-label="Main"><a href="/market">Define market</a><a href="/screen">Ranked screen</a>{% if session.folder %}<a href="/imports">Import data</a>{% endif %}</nav></header>
+<main id="content">
+{% if market %}
+<div class="case-caption" aria-label="Market caption"><div class="market-name">{{ market.occupation_codes|sort|join(', ') }}<br>{{ market.geography.code }} {{ market.geography.kind }}</div><div aria-hidden="true" class="section-rule">§<br>§<br>§</div><div>Screen of {{ market.employer_ids|length if market.employer_ids is not none else session.employers|length }} employers<br>{{ market.start_year }}–{{ market.end_year }}<br>Coverage: {{ 'partial' if result and result.partial_screen else 'awaiting screen' if not result else 'sufficient' }}</div></div>
+{% endif %}
+<h1>{{ title }}</h1>
+{% if error %}<div role="alert" class="caution">{{ error }}</div>{% endif %}
+{% if notice %}<p role="status">{{ notice }}</p>{% endif %}
+{% block content %}{% endblock %}
+</main>
+<footer>Agency-controlled screening. {{ wording.MUTUAL_LABEL }}. Review coverage and original records.</footer>
+</body></html>

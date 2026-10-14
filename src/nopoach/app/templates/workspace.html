@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<p class="reading">Choose the agency-controlled folder that holds this investigation's records. A new folder creates an empty workspace. Keep it outside the application folder.</p>
+<form method="post" action="/workspace"><label for="folder">Workspace folder</label><input id="folder" name="folder" required value="{{ session.folder or '' }}"><button type="submit">Open workspace</button></form>
+{% endblock %}

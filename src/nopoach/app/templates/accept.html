@@ -1,0 +1,6 @@
+{% extends 'base.html' %}{% block content %}
+<p>Confirm that you want to use a partial screen with these insufficient signals:</p>
+<ul>{% for key in ['flow','clauses','ties'] %}{% if result.sufficiency[key].status == 'insufficient' %}<li><strong>{{ wording.SIGNAL_LABELS[key] }}</strong>: {{ result.sufficiency[key].reason }}</li>{% endif %}{% endfor %}</ul>
+{% for source, reason in session.failures.items() %}<p>{{ source }} failed: {{ reason }}</p>{% endfor %}
+<p>Acceptance keeps reliability labels and displays a partial-screen banner in the ranked list and dossier export.</p><form method="post" action="/screen/accept"><label class="check" for="confirm"><input id="confirm" name="confirm" type="checkbox" value="yes" required>I have reviewed the insufficient signals.</label><button>Accept partial screen</button></form><a href="/screen">Return to screen</a>
+{% endblock %}
