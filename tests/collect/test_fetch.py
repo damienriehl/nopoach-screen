@@ -115,6 +115,27 @@ def test_redirect_is_logged_and_checked_before_request(tmp_path):
     assert log.records()[0].status_code == 302
 
 
+@pytest.mark.parametrize("status_code", [301, 302, 303, 307, 308])
+def test_redirect_without_location_is_logged_and_raises_policy_error(
+    tmp_path, status_code
+):
+    calls = []
+    body = b"synthetic redirect without destination"
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status_code, content=body)
+
+    log = ProvenanceLog(tmp_path / "provenance.jsonl")
+    with client(log, handler) as fetch:
+        with pytest.raises(FetchPolicyError, match="Redirect.*Location"):
+            fetch.fetch("https://www.sec.gov/synthetic")
+    assert len(calls) == 1
+    assert len(log.records()) == 1
+    assert log.records()[0].status_code == status_code
+    assert log.records()[0].sha256 == sha256(body).hexdigest()
+
+
 @pytest.mark.parametrize(
     "url",
     [

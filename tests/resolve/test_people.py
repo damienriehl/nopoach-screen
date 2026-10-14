@@ -1,3 +1,5 @@
+import pytest
+
 from nopoach.imports.loader import import_records
 from nopoach.imports.schema import ProvenanceClass
 from nopoach.resolve.people import PersonResolver
@@ -22,7 +24,7 @@ def row(key, **changes):
 def test_cross_source_merge_keeps_match_evidence_and_both_records(tmp_path):
     folder = tmp_path / "data"
     with Workspace.open(folder) as workspace:
-        for source, key in [("synthetic-A", "key-1"), ("synthetic-B", "other-key")]:
+        for source, key in [("synthetic-A", "key-1"), ("synthetic-B", "key-1")]:
             result = import_records(
                 workspace,
                 [row(key)],
@@ -44,6 +46,67 @@ def test_cross_source_merge_keeps_match_evidence_and_both_records(tmp_path):
         ).fetchone() == (2,)
     with Workspace.open(folder) as reopened:
         assert len(PersonResolver(reopened).evidence(person_id)) == 2
+
+
+@pytest.mark.parametrize("second_source", ["synthetic-A", "synthetic-B"])
+def test_namesakes_with_different_provider_keys_stay_separate(tmp_path, second_source):
+    with Workspace.open(tmp_path / "data") as workspace:
+        for source, key in [("synthetic-A", "key-1"), (second_source, "key-2")]:
+            result = import_records(
+                workspace,
+                [row(key)],
+                source=source,
+                provenance_class=ProvenanceClass.SYNTHETIC,
+            )
+            assert result.accepted_count == 1
+        assert workspace.connection.execute(
+            "SELECT count(*) FROM people"
+        ).fetchone() == (2,)
+        assert workspace.connection.execute(
+            "SELECT count(DISTINCT person_id) FROM person_keys"
+        ).fetchone() == (2,)
+        assert workspace.connection.execute(
+            "SELECT count(*) FROM positions GROUP BY person_id"
+        ).fetchall() == [(1,), (1,)]
+
+
+def test_name_and_employment_match_kept_when_stored_key_is_absent(tmp_path):
+    with Workspace.open(tmp_path / "data") as workspace:
+        result = import_records(
+            workspace,
+            [row("key-1")],
+            source="synthetic-A",
+            provenance_class=ProvenanceClass.SYNTHETIC,
+        )
+        assert result.accepted_count == 1
+        person_id = workspace.connection.execute("SELECT id FROM people").fetchone()[0]
+        # Characterize an existing keyless observation; imports still require keys.
+        workspace.connection.execute("UPDATE person_keys SET person_key = ''")
+        result = import_records(
+            workspace,
+            [row("key-2")],
+            source="synthetic-B",
+            provenance_class=ProvenanceClass.SYNTHETIC,
+        )
+        assert result.accepted_count == 1
+        assert workspace.connection.execute(
+            "SELECT count(*) FROM people"
+        ).fetchone() == (1,)
+        evidence = PersonResolver(workspace).evidence(person_id)
+        assert evidence[1]["evidence"]["matched_on"] == ["name_and_employment"]
+
+        # The keyless alias must not bridge two conflicting non-empty keys.
+        result = import_records(
+            workspace,
+            [row("key-3")],
+            source="synthetic-C",
+            provenance_class=ProvenanceClass.SYNTHETIC,
+        )
+        assert result.accepted_count == 1
+        assert workspace.connection.execute(
+            "SELECT count(*) FROM people"
+        ).fetchone() == (2,)
+        assert len(PersonResolver(workspace).evidence(person_id)) == 2
 
 
 def test_source_scoped_keys_shared_namespace_and_within_source(tmp_path):

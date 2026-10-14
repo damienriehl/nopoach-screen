@@ -170,7 +170,12 @@ class FetchClient:
                 redirects += 1
                 if redirects > 10:
                     raise FetchPolicyError("Too many public-source redirects")
-                current = current.join(response.headers["location"])
+                location = response.headers.get("location")
+                if location is None:
+                    raise FetchPolicyError(
+                        "Redirect response is missing a Location header"
+                    )
+                current = current.join(location)
                 continue
             response.raise_for_status()
             return FetchedResponse(

@@ -33,6 +33,12 @@ class PersonResolver:
             "SELECT id, person_id, namespace, person_key, normalized_name, "
             "employment_signature FROM person_keys ORDER BY rowid"
         ).fetchall()
+        # A keyless alias cannot bridge people with conflicting provider keys.
+        conflicting = {
+            person_id
+            for _, person_id, _, stored_key, _, _ in aliases
+            if stored_key and stored_key != person_key
+        }
         key = json.dumps([namespace, person_key])
         identity = (
             json.dumps([normalized, signature]) if normalized and signature else ""
@@ -47,6 +53,8 @@ class PersonResolver:
             stored_name,
             stored_sig,
         ) in aliases:
+            if person_id in conflicting:
+                continue
             unique_id = "candidate:" + alias_id
             entities[unique_id] = person_id
             records.append(
