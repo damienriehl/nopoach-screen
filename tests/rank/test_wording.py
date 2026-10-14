@@ -71,3 +71,21 @@ def test_fired_pair_summary_warrants_further_inquiry(one_way):
 def test_no_signal_summary_does_not_claim_an_inquiry_pattern():
     summary = wording.pair_summary("Synthetic A", "Synthetic B", (), one_way=False)
     assert "No screening signals fired" in summary
+
+
+def test_dossier_wording_including_captions_passes_banned_phrase_scan():
+    texts = [
+        *wording.DOSSIER_HEADINGS.values(),
+        wording.DOSSIER_TITLE,
+        wording.PARTIAL_SCREEN_BANNER,
+        wording.NO_FILED_CLAUSES,
+        wording.flow_caption(
+            "screens:synthetic", (("Synthetic A to Synthetic B", (2019, 2020)),)
+        ),
+        wording.flow_caption(
+            "screens:synthetic", (("Synthetic A to Synthetic B", None),)
+        ),
+    ]
+    assert all(BANNED.search(text) is None for text in texts)
+    assert "2019–2020" in texts[-2]
+    assert "no filed clauses found in the collected period" == wording.NO_FILED_CLAUSES
