@@ -430,9 +430,12 @@ def dol_in_period(
     dates = (
         record.decision_date,
         record.employment_begin_date,
-        record.employment_end_date,
     )
     if as_of is not None and any(d is not None and d > as_of for d in dates):
+        return False
+    if as_of is not None:
+        end = min(end, as_of)
+    if start > end:
         return False
     if record.employment_begin_date is not None:
         return record.employment_begin_date <= end and (

@@ -364,9 +364,9 @@ def test_period_scoped_lca_and_firm_wide_hires_supply_explanations(tmp_path):
             b"B-old,Synthetic B,29-1141,Fixture,ZZ,00000,900000,,Year,"
             b"1,2001-01-01,2001-01-01,2002-12-31\n"
             b"A-current,Synthetic A,29-1141,Fixture,ZZ,00000,100000,,Year,"
-            b"1,2018-01-01,2018-01-01,2019-12-31\n"
+            b"1,2018-01-01,2018-01-01,2021-12-31\n"
             b"B-current,Synthetic B,29-1141,Fixture,ZZ,00000,150000,,Year,"
-            b"1,2018-01-01,2018-01-01,2019-12-31\n"
+            b"1,2018-01-01,2018-01-01,2021-12-31\n"
             b"A-future,Synthetic A,29-1141,Fixture,ZZ,00000,900000,,Year,"
             b"1,2021-01-01,2021-01-01,2022-12-31\n"
         )
@@ -437,3 +437,305 @@ def test_cutoff_censors_month_precision_ends_in_pair_evidence(tmp_path):
         assert all(
             record.raw["end_date"] == "" for p in tie.positions for record in p.records
         )
+
+
+def import_site(workspace, key, name, metro, longitude, *, filed="2018-01-01"):
+    from nopoach.imports.loader import import_records
+
+    result = import_records(
+        workspace,
+        [
+            {
+                "person_key": key,
+                "employer_name": name,
+                "title": "Director",
+                "occupation_code": "29-1141",
+                "location": "Synthetic site",
+                "cbsa": metro,
+                "latitude": "0",
+                "longitude": str(longitude),
+                "start_date": "2018-01-01",
+                "start_precision": "day",
+                "end_date": "",
+                "end_precision": "unknown",
+                "filed_on": filed,
+            }
+        ],
+        source="synthetic",
+        provenance_class="synthetic",
+    )
+    assert result.rejects == ()
+    return result
+
+
+def store_test_lca(
+    workspace,
+    employer,
+    receipt,
+    case,
+    metro,
+    *,
+    decision="2018-01-01",
+    begin="2018-01-01",
+    end="2021-12-31",
+    state="ZZ",
+):
+    from dataclasses import asdict
+    from decimal import Decimal
+
+    from nopoach.collect.dol import DolRecord
+
+    record = DolRecord(
+        "LCA",
+        case,
+        "Synthetic employer",
+        employer,
+        "29-1141",
+        "Synthetic site",
+        state,
+        "00000",
+        metro,
+        Decimal(100000),
+        None,
+        "Year",
+        Decimal(100000),
+        None,
+        10,
+        "synthetic.csv",
+        receipt,
+        date.fromisoformat(decision),
+        date.fromisoformat(begin),
+        date.fromisoformat(end),
+    )
+    workspace.connection.execute(
+        "INSERT INTO dol_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            case,
+            employer,
+            "LCA",
+            case,
+            record.decision_date,
+            record.employment_begin_date,
+            record.employment_end_date,
+            json.dumps({"version": 1, "record": asdict(record)}, default=str),
+            receipt.id,
+        ],
+    )
+
+
+@pytest.mark.parametrize("spanning", [False, True])
+def test_cutoff_filters_dated_inputs_censors_spanning_records_and_preserves_source(
+    tmp_path,
+    spanning,
+):
+    from nopoach.collect.dol import load_dol_records
+    from nopoach.market.coverage import Headcount, store_workforce_input
+    from nopoach.pipeline import _filtered_workspace
+
+    cutoff = date(2019, 6, 15)
+    record_end = date(2021, 12, 31) if spanning else cutoff
+    market = Market(frozenset({"29-1141"}), Geography("metro", "99999"), 2018, 2021)
+    with Workspace.open(tmp_path / "cutoff-inputs") as workspace:
+        past = import_site(workspace, "director", "Synthetic A", "99999", 0)
+        import_site(workspace, "director", "Synthetic B", "99999", 1)
+        future = import_site(
+            workspace,
+            "future-filing",
+            "Synthetic A",
+            "99999",
+            0,
+            filed="2019-06-16",
+        )
+        db = workspace.connection
+        a, b = [
+            r[0]
+            for r in db.execute("SELECT id FROM employers ORDER BY name").fetchall()
+        ]
+        person = db.execute(
+            "SELECT person_id FROM positions WHERE id = ?", [past.position_ids[0]]
+        ).fetchone()[0]
+        receipt = next(
+            r for r in workspace.provenance.records() if r.id == past.provenance_id
+        )
+        counts = {
+            label: store_workforce_input(
+                workspace,
+                a,
+                2019,
+                market,
+                kind="imported",
+                headcount=Headcount(value, value, value, "synthetic count"),
+                as_of=when,
+                provenance_id=receipt.id,
+            )
+            for label, when, value in (
+                ("past", cutoff, 20),
+                ("future", date(2019, 6, 16), 99),
+            )
+        }
+        for case, decision, begin in (
+            ("spanning", "2019-06-15", "2019-06-15"),
+            ("future-decision", "2019-06-16", "2018-01-01"),
+            ("future-start", "2018-01-01", "2019-06-16"),
+        ):
+            store_test_lca(
+                workspace,
+                a,
+                receipt,
+                case,
+                "99999",
+                decision=decision,
+                begin=begin,
+                end=record_end.isoformat() if case == "spanning" else "2021-12-31",
+            )
+        for label, started in (
+            ("spanning-tie", cutoff),
+            ("future-tie", date(2019, 6, 16)),
+        ):
+            db.execute(
+                "INSERT INTO ties VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    label,
+                    person,
+                    a,
+                    b,
+                    "shared_director",
+                    started,
+                    record_end if label == "spanning-tie" else date(2021, 12, 31),
+                    receipt.id,
+                ],
+            )
+        tables = (
+            "positions",
+            "position_worksites",
+            "imported_rows",
+            "workforce_inputs",
+            "dol_records",
+            "ties",
+        )
+        original = {
+            t: db.execute(f"SELECT * FROM {t} ORDER BY ALL").fetchall() for t in tables
+        }
+        for as_of in (None, cutoff):
+            view = _filtered_workspace(workspace, as_of)
+            try:
+                expected_imports = set(past.position_ids + future.position_ids)
+                if as_of:
+                    expected_imports -= set(future.position_ids)
+                actual = {
+                    r[0]
+                    for r in view.connection.execute(
+                        "SELECT position_id FROM imported_rows"
+                    ).fetchall()
+                }
+                assert (
+                    actual.intersection(set(past.position_ids + future.position_ids))
+                    == expected_imports
+                )
+                assert {
+                    r[0]
+                    for r in view.connection.execute(
+                        "SELECT id FROM workforce_inputs"
+                    ).fetchall()
+                } == ({counts["past"]} if as_of else set(counts.values()))
+                records = load_dol_records(view)
+                assert {r.case_number for r in records} == (
+                    {"spanning"}
+                    if as_of
+                    else {"spanning", "future-decision", "future-start"}
+                )
+                assert next(
+                    r for r in records if r.case_number == "spanning"
+                ).employment_end_date == (cutoff if as_of else record_end)
+                assert view.connection.execute(
+                    "SELECT id, end_date FROM ties ORDER BY id"
+                ).fetchall() == (
+                    [("spanning-tie", None if spanning else cutoff)]
+                    if as_of
+                    else [
+                        ("future-tie", date(2021, 12, 31)),
+                        ("spanning-tie", record_end),
+                    ]
+                )
+            finally:
+                view.close()
+        screen = run_screen(workspace, market, as_of=cutoff)
+        ref = screen.references[0]
+        assert ref.dol_record_ids == ("spanning",)
+        assert ref.tie_ids == ("spanning-tie",)
+        assert ref.workforce_input_ids == (counts["past"],)
+        assert not set(future.position_ids).intersection(ref.position_ids)
+        assert {
+            t: db.execute(f"SELECT * FROM {t} ORDER BY ALL").fetchall() for t in tables
+        } == original
+
+
+@pytest.mark.parametrize(
+    "kind, use_lca", [("metro", False), ("metro", True), ("state", True)]
+)
+def test_gravity_uses_mean_in_market_sites_and_explanations_keep_all_sites(
+    tmp_path,
+    monkeypatch,
+    kind,
+    use_lca,
+):
+    from math import dist
+
+    import nopoach.pipeline as pipeline
+
+    with Workspace.open(tmp_path / "gravity-sites") as workspace:
+        imported = import_site(workspace, "director", "Synthetic A", "99999", 0)
+        import_site(workspace, "a-second", "Synthetic A", "99999", 2)
+        import_site(workspace, "a-outside", "Synthetic A", "88888", -10)
+        import_site(
+            workspace, "director", "Synthetic B", "66666" if use_lca else "99999", 4
+        )
+        import_site(workspace, "b-outside", "Synthetic B", "77777", -10)
+        # This employer has no site in the selected market.
+        import_site(workspace, "c-outside", "Synthetic C", "77777", -10)
+        db = workspace.connection
+        ids = dict(db.execute("SELECT name, id FROM employers").fetchall())
+        receipt = next(
+            r for r in workspace.provenance.records() if r.id == imported.provenance_id
+        )
+        if use_lca:
+            # In metro mode B's LCA supplies its local footprint; out-of-market
+            # LCA evidence must stay available only to explanations.
+            store_test_lca(workspace, ids["Synthetic B"], receipt, "b-local", "99999")
+            store_test_lca(
+                workspace, ids["Synthetic B"], receipt, "b-outside", "77777", state="YY"
+            )
+            if kind == "state":
+                for case, metro in (("a-west", "99999"), ("a-east", "88888")):
+                    store_test_lca(workspace, ids["Synthetic A"], receipt, case, metro)
+        captured = []
+        original_flow = pipeline.screen_flow
+
+        def observe_flow(market, positions, employers, coverage):
+            captured.extend(employers)
+            return original_flow(market, positions, employers, coverage)
+
+        monkeypatch.setattr(pipeline, "screen_flow", observe_flow)
+        market = Market(
+            frozenset({"29-1141"}),
+            Geography(kind, "ZZ" if kind == "state" else "99999"),
+            2018,
+            2020,
+        )
+        result = run_screen(workspace, market)
+        locations = {e.id: e.location_km for e in captured}
+        assert set(locations) == {ids["Synthetic A"], ids["Synthetic B"]}
+        # At latitude zero one degree of longitude is 111.19492664455873 km.
+        # Metro A is at 1 degree, B at 4 (positions) or 1 (LCA).
+        # State A averages its two LCA metro sites (1 and -10), B is at 1.
+        degrees = 5.5 if kind == "state" else 0 if use_lca else 3
+        assert dist(
+            locations[ids["Synthetic A"]], locations[ids["Synthetic B"]]
+        ) == pytest.approx(degrees * 111.19492664455873)
+        pair = next(
+            p
+            for p in result.mutual
+            if {p.employer_a_name, p.employer_b_name} == {"Synthetic A", "Synthetic B"}
+        )
+        check = next(c for c in pair.explanations if c.key == "geographic_separation")
+        assert check.measurements["distance_km"] == 0  # Shared outside site retained.

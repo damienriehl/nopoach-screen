@@ -2,8 +2,9 @@
 
 Cutoffs use event dates, never collection timestamps. Future starts/filings are
 excluded; future position ends are censored to unknown, preserving an already
-started spell without using its future departure. DOL records with future event
-dates are excluded. Clause extraction and tie scoring run on an ephemeral filtered copy,
+started spell without using its future departure. Future DOL decisions/starts
+are excluded; planned ends are censored to the cutoff. Spanning ties retain
+unknown ends. Clause extraction and tie scoring run on an ephemeral filtered copy,
 leaving facts intact.
 
 Stored bulk feeds have no completeness calendars: clause/tie sufficiency remains
@@ -122,16 +123,29 @@ def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
             connection.execute(
                 "DELETE FROM clauses WHERE filing_id NOT IN (SELECT id FROM filings)"
             )
+            connection.execute("DELETE FROM ties WHERE start_date > ?", [cutoff])
             connection.execute(
-                "DELETE FROM ties WHERE start_date > ? OR end_date > ?",
-                [cutoff, cutoff],
+                "UPDATE ties SET end_date = NULL WHERE end_date > ?", [cutoff]
             )
             connection.execute("DELETE FROM workforce_inputs WHERE as_of > ?", [cutoff])
             connection.execute(
                 "DELETE FROM dol_records WHERE decision_date > ? "
-                "OR employment_begin_date > ? OR employment_end_date > ?",
-                [cutoff, cutoff, cutoff],
+                "OR employment_begin_date > ?",
+                [cutoff, cutoff],
             )
+            # Scoring loads dates from details_json, not the indexed SQL columns.
+            for identifier, encoded in connection.execute(
+                "SELECT id, details_json FROM dol_records "
+                "WHERE employment_end_date > ?",
+                [cutoff],
+            ).fetchall():
+                payload = json.loads(encoded)
+                payload["record"]["employment_end_date"] = cutoff.isoformat()
+                connection.execute(
+                    "UPDATE dol_records SET employment_end_date = ?, "
+                    "details_json = ? WHERE id = ?",
+                    [cutoff, json.dumps(payload), identifier],
+                )
             if "clause_details" in tables:
                 connection.execute(
                     "DELETE FROM clause_details WHERE clause_id NOT IN "
@@ -217,10 +231,12 @@ def _explanation_inputs(
     employers: tuple[Employer, ...],
     market: Market,
     end: date,
-) -> dict[str, EmployerExplanationData]:
+) -> tuple[dict[str, EmployerExplanationData], dict[str, tuple[float, float]]]:
     start = date(market.start_year, 1, 1)
     receipts: dict[str, set[str]] = defaultdict(set)
     sites: dict[str, set[tuple[float, float]]] = defaultdict(set)
+    market_sites: dict[str, set[tuple[float, float]]] = defaultdict(set)
+    metro_sites: dict[str, set[tuple[float, float]]] = defaultdict(set)
     centroids: dict[str, tuple[float, float]] = {}
     rows = workspace.connection.execute(
         "SELECT p.employer_id, w.cbsa, w.latitude, w.longitude, w.provenance_id "
@@ -242,8 +258,19 @@ def _explanation_inputs(
                 6371 * radians(lat - latitude),
             )
             centroids[cbsa] = point
+            metro_sites[cbsa].add(point)
             sites[employer].add(point)
+            # Position worksites have CBSA only; do not infer a state crosswalk.
+            if market.geography == Geography("metro", cbsa):
+                market_sites[employer].add(point)
             receipts[employer].add(provenance)
+    gravity_centroids = {
+        cbsa: (
+            sum(p[0] for p in points) / len(points),
+            sum(p[1] for p in points) / len(points),
+        )
+        for cbsa, points in metro_sites.items()
+    }
     wages: dict[str, list[DolRecord]] = defaultdict(list)
     for row in load_dol_records(workspace):
         if not dol_in_period(row, start, end):
@@ -261,6 +288,8 @@ def _explanation_inputs(
                 wages[row.employer_id].append(row)
             if row.worksite_metro in centroids:
                 sites[row.employer_id].add(centroids[row.worksite_metro])
+            if geo == market.geography.code and row.worksite_metro in gravity_centroids:
+                market_sites[row.employer_id].add(gravity_centroids[row.worksite_metro])
             receipts[row.employer_id].add(row.provenance.id)
     occupation_people: dict[str, dict[str, set[str]]] = defaultdict(
         lambda: defaultdict(set)
@@ -319,7 +348,14 @@ def _explanation_inputs(
             else None,
             tuple(sorted(receipts[employer.id])),
         )
-    return result
+    locations = {
+        employer: (
+            sum(p[0] for p in points) / len(points),
+            sum(p[1] for p in points) / len(points),
+        )
+        for employer, points in market_sites.items()
+    }
+    return result, locations
 
 
 def _clause_signals(
@@ -511,17 +547,17 @@ def run_screen(
             workers=_workers(positions, effective_market, end),
             workspace=view,
         )
-        explanation_data = _explanation_inputs(
+        explanation_data, flow_locations = _explanation_inputs(
             view, positions, employers, effective_market, end
         )
         flow_employers = tuple(
             FlowEmployer(
                 e.id,
-                explanation_data[e.id].worksites_km[0],
+                flow_locations[e.id],
                 explanation_data[e.id].occupation_shares or {},
             )
             for e in employers
-            if explanation_data[e.id].worksites_km
+            if e.id in flow_locations
         )
         flow = screen_flow(effective_market, positions, flow_employers, report)
         effective = {

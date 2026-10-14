@@ -249,3 +249,57 @@ def test_high_tech_sec_signals_and_strict_disclosure_cutoff(tmp_path):
         assert parameters["as_of"] == "2010-09-23"
         missing = next(p for p in result.pairs if p.parties == ("Google", "Intel"))
         assert missing.status == "insufficient data" and missing.rank is None
+
+
+def test_backtest_keeps_spanning_tie_references_without_changing_source(tmp_path):
+    with Workspace.open(tmp_path / "spanning-tie") as workspace:
+        case = synthetic_case()
+        imported = import_records(
+            workspace,
+            [
+                {
+                    "person_key": "synthetic-director",
+                    "employer_name": name,
+                    "title": "Director",
+                    "location": "Synthetic site",
+                    "start_date": "2020-01-01",
+                    "start_precision": "day",
+                    "end_date": "2026-01-01",
+                    "end_precision": "day",
+                }
+                for name in case.parties
+            ],
+            source="synthetic",
+            provenance_class="synthetic",
+        )
+        assert imported.rejects == ()
+        db = workspace.connection
+        a, b = [
+            r[0] for r in db.execute("SELECT id FROM employers ORDER BY id").fetchall()
+        ]
+        person = db.execute("SELECT person_id FROM positions LIMIT 1").fetchone()[0]
+        db.execute(
+            "INSERT INTO ties VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                "spanning-tie",
+                person,
+                a,
+                b,
+                "shared_director",
+                date(2020, 1, 1),
+                date(2026, 1, 1),
+                imported.provenance_id,
+            ],
+        )
+        original = db.execute("SELECT * FROM ties").fetchall()
+        market = Market(frozenset({"29-1141"}), Geography("metro", "99999"), 2020, 2025)
+        result = run_backtest(workspace, {case.id: market}, cases=(case,)).cases[0]
+        assert result.cutoff == date(2024, 12, 31)
+        assert result.references[0].tie_ids == ("spanning-tie",)
+        assert len(result.pairs[0].pair.ties.ties) == 1
+        assert all(
+            p.end_date is None
+            for tie in result.pairs[0].pair.ties.ties
+            for p in tie.positions
+        )
+        assert db.execute("SELECT * FROM ties").fetchall() == original

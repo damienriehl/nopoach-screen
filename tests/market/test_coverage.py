@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import date
 from decimal import Decimal
 
 import httpx
@@ -231,3 +232,50 @@ def test_workspace_ktd16_inputs_used_when_estimates_omitted(tmp_path):
             market, employers, workers=(), workspace=workspace, as_of=date(2024, 1, 1)
         )
         assert past.employers[0].estimate.headcount.value == 500
+
+
+@pytest.mark.parametrize(
+    "future_field", [None, "decision_date", "employment_begin_date"]
+)
+def test_dol_cutoff_retains_spanning_period_but_excludes_future_events(
+    tmp_path,
+    future_field,
+):
+    from nopoach.collect.dol import DolRecord
+    from nopoach.market.coverage import dol_in_period
+
+    with Workspace.open(tmp_path / "dol-cutoff") as workspace:
+        receipt = workspace.provenance.append(
+            source="synthetic", url="file:lca", method="IMPORT", body=b"synthetic"
+        )
+        record = DolRecord(
+            "LCA",
+            "spanning",
+            "Synthetic A",
+            "a",
+            "15-1252",
+            "Fixture",
+            "MN",
+            "00000",
+            "99999",
+            None,
+            None,
+            "Year",
+            None,
+            None,
+            12,
+            "synthetic.csv",
+            receipt,
+            date(2019, 6, 15),
+            date(2019, 6, 15),
+            date(2021, 12, 31),
+        )
+        if future_field:
+            record = replace(record, **{future_field: date(2019, 6, 16)})
+        assert dol_in_period(record, date(2019, 1, 1), date(2019, 12, 31))
+        assert dol_in_period(
+            record, date(2019, 1, 1), date(2019, 12, 31), as_of=date(2019, 6, 15)
+        ) is (future_field is None)
+        assert not dol_in_period(
+            record, date(2019, 6, 16), date(2020, 12, 31), as_of=date(2019, 6, 15)
+        )
