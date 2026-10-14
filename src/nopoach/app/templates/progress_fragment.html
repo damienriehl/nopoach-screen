@@ -1,0 +1,5 @@
+<div id="screen-progress" role="status" aria-live="polite" aria-atomic="true" {% if session.status == 'Collecting' %}hx-get="/screen/progress" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+<p><strong>{{ session.status }}</strong>: {{ session.progress }}</p>
+{% if session.status == 'Collecting' %}<progress aria-label="Screen in progress">Screen in progress</progress>{% else %}<a href="/screen">Read screen results</a>{% endif %}
+{% for source, reason in session.failures.items() %}<p class="caution">{{ source }} failed: {{ reason }}. Retry source, or continue with partial results.</p><form method="post" action="/screen/retry"><input type="hidden" name="source" value="{{ source }}"><button>Retry source</button></form>{% endfor %}
+</div>

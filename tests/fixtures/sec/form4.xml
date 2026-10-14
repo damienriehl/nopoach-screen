@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+  <documentType>4</documentType><periodOfReport>2020-02-01</periodOfReport>
+  <issuer><issuerCik>0000001111</issuerCik><issuerName>Synthetic Market Works</issuerName></issuer>
+  <reportingOwner><reportingOwnerId><rptOwnerCik>0000009001</rptOwnerCik><rptOwnerName>Alex Synthetic</rptOwnerName></reportingOwnerId>
+    <reportingOwnerRelationship><isDirector>0</isDirector><isOfficer>1</isOfficer><officerTitle>Chief Financial Officer</officerTitle></reportingOwnerRelationship>
+  </reportingOwner>
+</ownershipDocument>

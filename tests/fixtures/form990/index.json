@@ -1,0 +1,6 @@
+{"Filings2020": [
+  {"EIN": "123456789", "TaxPeriod": "201912", "FormType": "990", "ObjectId": "synthetic-hospital", "URL": "https://s3.amazonaws.com/irs-form-990/synthetic-hospital_public.xml"},
+  {"EIN": "987654321", "TaxPeriod": "201912", "FormType": "990", "ObjectId": "synthetic-university", "URL": "https://s3.amazonaws.com/irs-form-990/synthetic-university_public.xml"},
+  {"EIN": "555555555", "TaxPeriod": "201912", "FormType": "990", "ObjectId": "unrelated", "URL": "https://s3.amazonaws.com/irs-form-990/unrelated_public.xml"},
+  {"EIN": "123456789", "TaxPeriod": "201912", "FormType": "990", "ObjectId": "malformed", "URL": "https://s3.amazonaws.com/irs-form-990/malformed_public.xml"}
+]}

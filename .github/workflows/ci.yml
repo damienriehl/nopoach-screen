@@ -1,0 +1,74 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Scan repository history for data files and optional denylist terms
+        shell: bash
+        env:
+          NOPOACH_DENYLIST: ${{ secrets.NOPOACH_DENYLIST }}
+        run: |
+          umask 077
+          if [ -n "$NOPOACH_DENYLIST" ]; then
+            export NOPOACH_DENYLIST_PATH="$RUNNER_TEMP/nopoach-denylist.txt"
+            trap 'rm -f "$NOPOACH_DENYLIST_PATH"' EXIT
+            printf '%s' "$NOPOACH_DENYLIST" > "$NOPOACH_DENYLIST_PATH"
+          fi
+          unset NOPOACH_DENYLIST
+          python packaging/scan_repository.py --history
+  checks:
+    needs: hygiene
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Install runtime, development and build tools
+        run: |
+          uv sync --locked --group dev --group build
+      - name: Lint, format, types and tests
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+          uv run --no-sync mypy src
+          uv run --no-sync pytest
+      - name: Build Windows one-folder release
+        if: runner.os == 'Windows'
+        run: uv run --no-sync python packaging/build.py --output release
+      - name: Smoke built Windows executable on loopback
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:NOPOACH_EXECUTABLE = (Resolve-Path release/nopoach-screen/nopoach-screen.exe).Path
+          uv run --no-sync pytest -m live tests/packaging/test_smoke.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: runner.os == 'Windows'
+        with:
+          name: windows-review-build
+          if-no-files-found: error
+          path: |
+            release/nopoach-screen.zip
+            release/SHA256SUMS.txt
+            release/bom.cdx.json
+            release/IT-REVIEW.md

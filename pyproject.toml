@@ -1,0 +1,74 @@
+[project]
+name = "nopoach-screen"
+version = "0.1.0"
+description = "Local, provenance-backed screening of public labor-market data"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+dependencies = [
+    "duckdb>=1.5,<2",
+    "httpx>=0.28,<1",
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "python-multipart",
+    "pyarrow",
+    "numpy",
+    "pandas",
+    "scipy",
+    "statsmodels",
+    "pyfixest",
+    "splink",
+    "rapidfuzz",
+    "python-docx",
+    "matplotlib",
+    "pyyaml",
+    "lxml",
+    "pydantic",
+    "pypdf",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9,<10",
+    "ruff>=0.17,<1",
+    "mypy>=2.4,<3",
+    "types-PyYAML",
+    "playwright",
+    "axe-playwright-python",
+]
+build = [
+    "pyinstaller==6.22.3",
+    "cyclonedx-bom==7.5.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-m 'not browser and not live'"
+markers = [
+    "browser: host-owned browser launch (enable explicitly with -m browser)",
+    "live: host-owned sockets or real network (enable explicitly with -m live)",
+    "network_off: verifies behavior without network access",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[build-system]
+requires = ["hatchling>=1.32,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nopoach"]
+
+[tool.uv]
+# Matches uv.lock and the tested offline wheelhouse; move deliberately with `uv lock`.
+exclude-newer = "2026-10-13T14:50:00Z"

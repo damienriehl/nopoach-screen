@@ -1,0 +1,9 @@
+Description: Daily Form Index
+Form Type   Company Name                      CIK         Date Filed  File Name
+--------------------------------------------------------------------------------
+4           Synthetic Market Works            1111        2020-02-03  edgar/data/1111/synthetic-form4.txt
+8-K         Synthetic Market Works            1111        2020-03-03  edgar/data/1111/synthetic-departure.txt
+DEF 14A     Synthetic Market Parent           2222        2020-04-01  edgar/data/2222/synthetic-proxy.txt
+4           Synthetic Unrelated Employer      3333        2020-02-03  edgar/data/3333/unrelated.txt
+10-K        Synthetic Market Works            1111        2020-02-03  edgar/data/1111/not-needed.txt
+4           Synthetic Market Works            1111        2020-02-03  edgar/data/1111/malformed.txt

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Set NOPOACH_DENYLIST_PATH to a private UTF-8 file outside this repository.
+exec python packaging/scan_repository.py

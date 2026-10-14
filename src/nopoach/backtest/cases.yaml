@@ -1,0 +1,142 @@
+# Public-record benchmark facts only. Occupation/geography are descriptions,
+# not inferred SOC codes, market boundaries, or a claim that every party-pair
+# had a bilateral agreement. Callers supply the markets to screen.
+cases:
+  - id: high-tech
+    name: In re High-Tech Employee Antitrust Litigation
+    parties: [Adobe Systems, Apple, Google, Intel, Intuit, Pixar, Lucasfilm]
+    occupation: Technical employees, including software engineers
+    geography: United States; employers concentrated in Northern California
+    agreement_start_year: 2005
+    agreement_end_year: 2009
+    disclosure_date: 2010-09-24
+    known_pairs:
+      - [Apple, Google]
+      - [Apple, Adobe Systems]
+      - [Apple, Pixar]
+      - [Google, Intel]
+      - [Google, Intuit]
+      - [Pixar, Lucasfilm]
+    sources:
+      - https://www.justice.gov/d9/atr/case-documents/attachments/2010/09/24/262654.pdf
+      - https://www.justice.gov/atr/case/us-v-adobe-systems-inc-et-al
+      - https://www.justice.gov/atr/case/us-v-lucasfilm-ltd
+    notes: >-
+      The benchmark period is the consolidated private case's 2005–2009
+      period, not an exact start/end for every bilateral restriction.
+      Disclosure uses the first DOJ complaint in this set; the Lucasfilm
+      complaint followed in December 2010. Earlier reports of an investigation
+      are not treated as the filing date. Only specified bilateral pairs are
+      tested; co-defendant status does not establish every possible pair.
+
+  - id: animation-workers
+    name: In re Animation Workers Antitrust Litigation
+    parties:
+      - Pixar
+      - Lucasfilm
+      - DreamWorks Animation
+      - The Walt Disney Company
+      - Sony Pictures Animation
+      - Sony Pictures Imageworks
+      - Blue Sky Studios
+      - ImageMovers
+      - ImageMovers Digital
+    occupation: Animation and visual-effects employees
+    geography: United States, including California and Connecticut
+    agreement_start_year: 2004
+    agreement_end_year: 2010
+    disclosure_date: 2010-09-17
+    known_pairs:
+      - [Pixar, Lucasfilm]
+      - [Pixar, DreamWorks Animation]
+      - [Pixar, Sony Pictures Imageworks]
+      - [Pixar, Blue Sky Studios]
+      - [Lucasfilm, The Walt Disney Company]
+      - [DreamWorks Animation, Blue Sky Studios]
+    sources:
+      - https://www.govinfo.gov/content/pkg/USCOURTS-cand-5_14-cv-04062/pdf/USCOURTS-cand-5_14-cv-04062-9.pdf
+      - https://pbwt2.gjassets.com/content/uploads/2022/02/In-re-Animation-Workers-Antitrust-Litigation.pdf
+    notes: >-
+      The private complaint was filed September 8, 2014. The cutoff instead
+      precedes September 17, 2010, the earlier Pixar investigation news
+      identified in the court's chronology, to avoid using the intervening
+      public revelations. The 2004–2010 benchmark window does not assert the
+      earliest alleged agreement or equal durations for all studios.
+      Listed pairs are allegations, not findings of liability.
+
+  - id: knorr-wabtec
+    name: United States v. Knorr-Bremse and Wabtec
+    parties:
+      - Knorr-Bremse AG
+      - Westinghouse Air Brake Technologies Corporation
+      - Faiveley Transport
+    occupation: Rail-equipment engineers, project managers and other skilled employees
+    geography: United States
+    agreement_start_year: 2009
+    agreement_end_year: 2016
+    disclosure_date: 2018-04-03
+    known_pairs:
+      - [Knorr-Bremse AG, Westinghouse Air Brake Technologies Corporation]
+      - [Knorr-Bremse AG, Faiveley Transport]
+      - [Westinghouse Air Brake Technologies Corporation, Faiveley Transport]
+    sources:
+      - https://www.justice.gov/atr/case/us-v-knorr-bremse-and-westinghouse-air-brake-technologies
+      - https://www.justice.gov/archives/opa/pr/justice-department-requires-knorr-and-wabtec-terminate-unlawful-agreements-not-compete
+    notes: >-
+      The DOJ alleged starts no later than 2009 for Knorr/Wabtec, 2011 for
+      Knorr/Faiveley and 2014 for Wabtec/Faiveley; agreements ended before
+      October 2016. Wabtec acquired Faiveley in November 2016. Map historical
+      subsidiaries to resolved workspace employers explicitly where needed.
+
+  - id: seaman-duke
+    name: Seaman v. Duke University
+    parties:
+      - Duke University
+      - Duke University Health System
+      - University of North Carolina at Chapel Hill
+      - University of North Carolina Health Care System
+    occupation: Medical-school faculty and academic physicians
+    geography: Durham and Chapel Hill, North Carolina
+    agreement_start_year: 2012
+    agreement_end_year: 2017
+    disclosure_date: 2015-06-09
+    known_pairs:
+      - [Duke University, University of North Carolina at Chapel Hill]
+    sources:
+      - https://law.justia.com/cases/federal/district-courts/north-carolina/ncmdce/1%3A2015cv00462/69183/388/
+      - https://pbwt2.gjassets.com/content/uploads/2018/01/UNC-no-poach-settlement-agreement.pdf
+    notes: >-
+      Disclosure is the original complaint's filing date. The 2012–2017
+      window describes the UNC settlement class period; screening is always
+      truncated before disclosure. The alleged restriction concerned lateral
+      hiring, with promotion exceptions; a benchmark does not establish liability.
+
+  - id: patel
+    name: United States v. Patel
+    parties:
+      - Pratt & Whitney
+      - Agilis Engineering
+      - Belcan Engineering Group
+      - Cyient
+      - Parametric Solutions
+      - QuEST Global Services NA
+    occupation: Aerospace engineers and other skilled outsourced workers
+    geography: United States, including Connecticut and Florida
+    agreement_start_year: 2011
+    agreement_end_year: 2019
+    disclosure_date: 2021-12-09
+    known_pairs:
+      - [Agilis Engineering, Belcan Engineering Group]
+      - [Agilis Engineering, Parametric Solutions]
+      - [Agilis Engineering, QuEST Global Services NA]
+      - [Agilis Engineering, Cyient]
+      - [Cyient, QuEST Global Services NA]
+    sources:
+      - https://www.justice.gov/archives/opa/pr/former-aerospace-outsourcing-executive-charged-key-role-long-running-antitrust-conspiracy
+      - https://pbwt2.gjassets.com/content/uploads/2023/05/Patel-Acquittal-Order.pdf
+    notes: >-
+      All criminal defendants were acquitted in 2023. This is an allegation
+      benchmark, not a confirmed agreement or a positive ground-truth label.
+      The listed supplier pairs reflect restrictions discussed in the court's
+      acquittal order, not findings that those restrictions violated the law.
+      Disclosure uses the unsealed complaint, before the December 16 indictment.
