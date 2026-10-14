@@ -1,3 +1,9 @@
+---
+session: "34ced6f5-52a4-4d3d-9d81-d2b04a5c7ac9"
+written_at: "2026-10-14T19:06:18.937Z"
+head: "c6b02cb4964fba2995f9a3e012aff9bfa6338c38"
+branch: "docs/requirements-plan"
+---
 # Handoff: no-poach screen v1 built, PR #1 awaiting the denylist secret
 
 ## State
@@ -9,11 +15,15 @@
 
 ## Blocked on Damien
 
-- **`NOPOACH_DENYLIST` Actions secret.** The repository-hygiene job fails closed without it, and the Linux and Windows test jobs (including the Windows build smoke) wait behind it. The terms are confidential: the collaborator, the agency and live targets. Only Damien can supply them. Once the secret exists, rerun CI. Merge after hygiene and both OS jobs pass.
+- **`NOPOACH_DENYLIST` Actions secret.** The repository-hygiene job fails closed without it, and the Linux and Windows test jobs (including the Windows build smoke) wait behind it. The terms are confidential: the collaborator and the agency. Only Damien can supply them, and he chose to run the paste-safe prompt command himself (ask `nopoach-screen-2026-10-14-1626-v1-release-questions`, qid `denylist-supply`). Once the secret exists, rerun CI. Merge after hygiene and both OS jobs pass.
+
+## Decided 2026-10-14
+
+- **Repository goes public after PR #1 merges** (qid `repo-visibility`). There is no live investigation; the tool is built for future ones. After the merge, flip the repository to public under the MIT license, after one more full-history scan with the denylist.
+- **Aggregator data: validation only, disclosed** (ask `nopoach-screen-2026-10-13-1454-backtest-aggregator-data`). Aggregator data may be bought only for historical backtests, never for live leads, and the method note names its source. Any purchase is spend, so it needs Damien's separate approval once quotes come in.
 
 ## Open, non-blocking
 
-- Cockpit ask `nopoach-screen-2026-10-13-1454-backtest-aggregator-data` decides whether aggregator data may validate the method. It gates only the real-data backtest. Run `cockpit-answer inspect` before re-asking.
 - The collaborator picks the pilot market (R22).
 
 ## Follow-ups (not built in v1)
