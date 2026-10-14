@@ -1,4 +1,4 @@
-"""Editable Word pair dossiers from the persisted U10b screen result (U13).
+"""Editable Word pair dossiers from the persisted screen result.
 
 Styles are built in code rather than stored as an opaque binary template.
 No collection or signal recomputation occurs during export. A figure's stored
@@ -203,9 +203,7 @@ def _sources(
     # Expected flow uses the wider market, so retain its receipts too.
     receipt_ids = {r for refs in screen.references for r in refs.provenance_ids}
     classes: dict[str, str] = {}
-    if workspace.connection.execute(
-        "SELECT table_name FROM information_schema.tables WHERE table_name = 'imports'"
-    ).fetchone():
+    if "imports" in workspace.table_names():
         classes = dict(
             workspace.connection.execute(
                 "SELECT provenance_id, provenance_class FROM imports"
@@ -245,7 +243,7 @@ def export_dossier(
     *,
     partial_screen: bool = False,
 ) -> Path:
-    """Write a standalone dossier; U12 may explicitly request the partial banner.
+    """Write a standalone dossier; the app may explicitly request the partial banner.
 
     Pass a pair from this screen (including an unreliable group's pair), and
     the workspace in which run_screen persisted it. Explicit partial status

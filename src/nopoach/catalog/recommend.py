@@ -1,4 +1,4 @@
-"""Versioned, offline source catalog and recommendations for U6 flow gaps.
+"""Versioned, offline source catalog and recommendations for flow sufficiency gaps.
 
 Catalog inclusion is not collection authorization or a guarantee of coverage.
 The agency obtains and licenses any records; this module makes no network calls.

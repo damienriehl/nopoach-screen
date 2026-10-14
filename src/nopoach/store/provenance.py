@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
+from typing import Any
 from uuid import uuid4
 
 import duckdb
@@ -32,6 +33,12 @@ class ProvenanceRecord:
     collection_method: str
     sha256: str
     status_code: int | None = None
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "ProvenanceRecord":
+        return cls(
+            **{**data, "collected_at": datetime.fromisoformat(data["collected_at"])}
+        )
 
     def database_values(self) -> tuple[object, ...]:
         return (
@@ -59,26 +66,39 @@ class ProvenanceLog:
         self._lock = RLock()
         descriptor = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         os.close(descriptor)
+        records = self.records()
+        self._ids = {record.id for record in records}
         if connection is not None:
-            records = self.records()
-            logged_ids = {record.id for record in records}
-            database_ids = {
-                row[0]
-                for row in connection.execute("SELECT id FROM provenance").fetchall()
+            database_records = {
+                row[0]: row
+                for row in connection.execute("SELECT * FROM provenance").fetchall()
             }
-            if not database_ids.issubset(logged_ids):
+            if not database_records.keys() <= self._ids:
                 raise AppendOnlyError("Existing provenance records removed from log")
+            missing = []
             for record in records:
-                self._mirror(record)
+                existing = database_records.get(record.id)
+                if existing is None:
+                    missing.append(record.database_values())
+                elif existing != record.database_values():
+                    # Keep the same recovered prefix if a later receipt disagrees.
+                    if missing:
+                        connection.executemany(
+                            "INSERT INTO provenance VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            missing,
+                        )
+                    raise AppendOnlyError("Cannot edit an existing provenance record")
+            if missing:
+                connection.executemany(
+                    "INSERT INTO provenance VALUES (?, ?, ?, ?, ?, ?, ?, ?)", missing
+                )
 
     def records(self) -> tuple[ProvenanceRecord, ...]:
         with self._lock:
             records = []
             seen = set()
             for line in self.path.read_text(encoding="utf-8").splitlines():
-                data = json.loads(line)
-                data["collected_at"] = datetime.fromisoformat(data["collected_at"])
-                record = ProvenanceRecord(**data)
+                record = ProvenanceRecord.from_json(json.loads(line))
                 if record.id in seen:
                     raise AppendOnlyError("Duplicate existing provenance record")
                 seen.add(record.id)
@@ -112,7 +132,7 @@ class ProvenanceLog:
     def append_record(self, record: ProvenanceRecord) -> None:
         """Append a new receipt; even an identical existing ID is rejected."""
         with self._lock:
-            if any(existing.id == record.id for existing in self.records()):
+            if record.id in self._ids:
                 raise AppendOnlyError("Cannot edit an existing provenance record")
             data = asdict(record)
             data["collected_at"] = record.collected_at.isoformat()
@@ -120,6 +140,7 @@ class ProvenanceLog:
                 stream.write(json.dumps(data, sort_keys=True) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
+            self._ids.add(record.id)
             self._mirror(record)
 
     def _mirror(self, record: ProvenanceRecord) -> None:

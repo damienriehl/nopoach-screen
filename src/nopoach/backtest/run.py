@@ -201,7 +201,7 @@ def run_backtest(
     """Run selected case IDs with explicit markets; write only to the workspace.
 
     Market selections retain all supplied comparison employers. Public party
-    names match conservatively through U3 normalization; callers may supply
+    names match conservatively through employer normalization; callers may supply
     resolved IDs for aliases or ambiguities without mutating source records.
     The pipeline owns event filtering and signal/reliability behavior, including
     keeping independent clause/tie leads visible when flow is insufficient.

@@ -6,6 +6,7 @@ from types import TracebackType
 
 import duckdb
 
+from nopoach.store import connect
 from nopoach.store.provenance import ProvenanceLog
 from nopoach.store.schema import initialize_schema
 
@@ -38,14 +39,7 @@ class Workspace:
         parquet = root / "parquet"
         parquet.mkdir(mode=0o700, exist_ok=True)
         database = root / "workspace.duckdb"
-        # Apply these settings at connect time, before any SQL executes.
-        connection = duckdb.connect(
-            str(database),
-            config={
-                "autoinstall_known_extensions": "false",
-                "autoload_known_extensions": "false",
-            },
-        )
+        connection = connect(database)
         try:
             initialize_schema(connection)
             provenance = ProvenanceLog(root / "provenance.jsonl", connection)
@@ -53,6 +47,9 @@ class Workspace:
             connection.close()
             raise
         return cls(root, database, parquet, provenance, connection)
+
+    def table_names(self) -> set[str]:
+        return {row[0] for row in self.connection.execute("SHOW TABLES").fetchall()}
 
     def close(self) -> None:
         self.connection.close()

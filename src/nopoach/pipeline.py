@@ -3,12 +3,14 @@
 Cutoffs use event dates, never collection timestamps. Future starts/filings are
 excluded; future position ends are censored to unknown, preserving an already
 started spell without using its future departure. DOL records with future event
-dates are excluded. U8/U9 run on an ephemeral filtered copy, leaving facts intact.
+dates are excluded. Clause extraction and tie scoring run on an ephemeral filtered copy,
+leaving facts intact.
 
 Stored bulk feeds have no completeness calendars: clause/tie sufficiency remains
 unknown rather than treating an observed document as a complete collection.
 Accepting a partial screen records that choice; it does not change reliability.
-Centroids use a common local equirectangular projection in kilometres for U7/U10.
+Centroids use a common local equirectangular projection in kilometres for flow scoring
+and explanations.
 This is a metro-scale distance approximation, not a geodesic measurement.
 """
 
@@ -20,8 +22,6 @@ from itertools import combinations
 from math import cos, radians
 from typing import Any
 from uuid import uuid4
-
-import duckdb
 
 from nopoach.catalog.recommend import Recommendation, recommend_sources
 from nopoach.collect.dol import DolRecord, load_dol_records
@@ -42,12 +42,13 @@ from nopoach.signals.clauses import (
     extract_clauses,
 )
 from nopoach.signals.clauses import (
-    score_pair as score_clauses,
+    score_pairs as score_clauses,
 )
 from nopoach.signals.flow import FlowEmployer, ResolvedPosition, screen_flow
-from nopoach.signals.ties import PairTies, _board, _executive
-from nopoach.signals.ties import _positions as tie_positions
+from nopoach.signals.ties import PairTies, board, executive
+from nopoach.signals.ties import positions as tie_positions
 from nopoach.signals.ties import score_pair as score_ties
+from nopoach.store import connect
 from nopoach.store.workspace import Workspace
 
 
@@ -89,15 +90,11 @@ class ScreenResult:
 
 
 def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
-    """Copy facts into memory before filtering; shared U8/U9 APIs read Workspace."""
-    connection = duckdb.connect(
-        config={
-            "autoinstall_known_extensions": "false",
-            "autoload_known_extensions": "false",
-        }
-    )
+    """Copy facts into memory before filtering for clause and tie scoring."""
+    connection = connect()
     try:
-        for (table,) in workspace.connection.execute("SHOW TABLES").fetchall():
+        tables = workspace.table_names()
+        for table in sorted(tables):
             # Quote workspace-controlled SQL identifiers, including resolver tables.
             name = '"' + table.replace('"', '""') + '"'
             arrow = workspace.connection.execute(
@@ -106,7 +103,7 @@ def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
             connection.register("screen_copy", arrow)
             connection.execute(f"CREATE TABLE {name} AS SELECT * FROM screen_copy")
             connection.unregister("screen_copy")
-        # U8 lazily creates clause_details with a reference to this key.
+        # Clause extraction lazily creates clause_details with a reference to this key.
         connection.execute("ALTER TABLE clauses ADD PRIMARY KEY (id)")
         if cutoff is not None:
             future_ends = {
@@ -135,13 +132,14 @@ def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
                 "OR employment_begin_date > ? OR employment_end_date > ?",
                 [cutoff, cutoff, cutoff],
             )
-            tables = {r[0] for r in connection.execute("SHOW TABLES").fetchall()}
             if "clause_details" in tables:
                 connection.execute(
                     "DELETE FROM clause_details WHERE clause_id NOT IN "
                     "(SELECT id FROM clauses)"
                 )
             if "imported_rows" in tables:
+                deleted = []
+                updated = []
                 for import_id, number, raw, position_id in connection.execute(
                     "SELECT import_id, row_number, raw_json, position_id "
                     "FROM imported_rows"
@@ -151,27 +149,30 @@ def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
                         data.get("filed_on")
                         and date.fromisoformat(data["filed_on"]) > cutoff
                     ):
-                        connection.execute(
-                            "DELETE FROM positions WHERE id IN (SELECT position_id "
-                            "FROM imported_rows WHERE import_id = ? "
-                            "AND row_number = ?)",
-                            [import_id, number],
-                        )
-                        connection.execute(
-                            "DELETE FROM imported_rows WHERE import_id = ? "
-                            "AND row_number = ?",
-                            [import_id, number],
-                        )
+                        deleted.append((import_id, number))
                     elif position_id in future_ends:
-                        # Use U3's normalized date bound for every precision;
-                        # the raw month/year can include days after the cutoff.
+                        # Use normalized import date bounds for every precision;
+                        # raw months/years can include days after the cutoff.
                         data["end_date"] = ""
                         data["end_precision"] = "unknown"
-                        connection.execute(
-                            "UPDATE imported_rows SET raw_json = ? "
-                            "WHERE import_id = ? AND row_number = ?",
-                            [json.dumps(data), import_id, number],
-                        )
+                        updated.append((json.dumps(data), import_id, number))
+                if deleted:
+                    connection.executemany(
+                        "DELETE FROM positions WHERE id IN (SELECT position_id "
+                        "FROM imported_rows WHERE import_id = ? AND row_number = ?)",
+                        deleted,
+                    )
+                    connection.executemany(
+                        "DELETE FROM imported_rows WHERE import_id = ? "
+                        "AND row_number = ?",
+                        deleted,
+                    )
+                if updated:
+                    connection.executemany(
+                        "UPDATE imported_rows SET raw_json = ? "
+                        "WHERE import_id = ? AND row_number = ?",
+                        updated,
+                    )
                 connection.execute(
                     "DELETE FROM imported_rows WHERE position_id IS NOT NULL "
                     "AND position_id NOT IN (SELECT id FROM positions)"
@@ -186,7 +187,7 @@ def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
         raise
 
 
-def _positions(workspace: Workspace) -> tuple[ResolvedPosition, ...]:
+def _resolved_positions(workspace: Workspace) -> tuple[ResolvedPosition, ...]:
     # Only CBSA is persisted. A state crosswalk is not inferred from city/name.
     geography = {
         identifier: Geography("metro", cbsa)
@@ -332,16 +333,12 @@ def _clause_signals(
                 "SELECT clause_id FROM clause_details"
             ).fetchall()
         }
-        if (
-            workspace.connection.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_name = 'clause_details'"
-            ).fetchall()
-        )
+        if "clause_details" in workspace.table_names()
         else set()
     )
-    # U2/imported clauses can predate U8's structured companion table. Extract
-    # from their persisted text using the same U8 rules, keeping U1 record IDs.
+    # Extract unstructured imported clauses from their persisted text, using
+    # the same clause rules and preserving their record IDs.
+    employers_by_id = {employer.id: employer for employer in employers}
     extracted: list[Clause] = []
     for (
         identifier,
@@ -364,17 +361,22 @@ def _clause_signals(
             receipts[provenance],
             filed,
             form,
-            next((e for e in employers if e.id == issuer), Employer(issuer, "")),
+            employers_by_id.get(issuer, Employer(issuer, "")),
             location or filing,
         )
         extracted.extend(
             replace(c, id=identifier) for c in extract_clauses(doc, employers)
         )
     result = []
-    for a, b in combinations(employers, 2):
-        signal = score_clauses(workspace, a.id, b.id)
+    for signal in score_clauses(
+        workspace, tuple((a.id, b.id) for a, b in combinations(employers, 2))
+    ):
         clauses = tuple(c for c in signal.clauses if start <= c.filed_on <= end)
-        clauses += tuple(c for c in extracted if (a.id, b.id) in c.pairs)
+        clauses += tuple(
+            c
+            for c in extracted
+            if (signal.employer_a_id, signal.employer_b_id) in c.pairs
+        )
         result.append(replace(signal, clauses=clauses))
     return tuple(result)
 
@@ -382,12 +384,13 @@ def _clause_signals(
 def _tie_signals(
     workspace: Workspace, employers: tuple[Employer, ...], start: date, end: date
 ) -> tuple[PairTies, ...]:
-    # U9 only connects leadership people, but uses their entire employment
+    # Tie scoring only connects leadership people, but uses their entire employment
     # history for former-coworker evidence. Use its role predicates exactly;
     # retain every spell for eligible people, including ordinary former jobs.
-    people = sorted(
-        {p.person_id for p in tie_positions(workspace) if _board(p) or _executive(p)}
-    )
+    positions = tie_positions(workspace)
+    people = sorted({p.person_id for p in positions if board(p) or executive(p)})
+    eligible_people = set(people)
+    eligible_positions = [p for p in positions if p.person_id in eligible_people]
     connection = workspace.connection
     connection.execute("ALTER TABLE positions RENAME TO screen_all_positions")
     try:
@@ -397,7 +400,14 @@ def _tie_signals(
             [people],
         )
         return tuple(
-            score_ties(workspace, a.id, b.id, start_date=start, end_date=end)
+            score_ties(
+                workspace,
+                a.id,
+                b.id,
+                start_date=start,
+                end_date=end,
+                precomputed_positions=eligible_positions,
+            )
             for a, b in combinations(employers, 2)
         )
     finally:
@@ -494,7 +504,7 @@ def run_screen(
         effective_market = replace(
             effective_market, employer_ids=frozenset(e.id for e in employers)
         )
-        positions = _positions(view)
+        positions = _resolved_positions(view)
         report = coverage_report(
             effective_market,
             employers,
@@ -552,20 +562,16 @@ def run_screen(
 
         verdicts = (sufficiency.flow, sufficiency.clauses, sufficiency.ties)
         partial = any(v.status == "insufficient" for v in verdicts)
-        recommendation_verdict = replace(
-            sufficiency,
-            flow=Verdict(
-                "insufficient",
-                "; ".join(v.reason for v in verdicts if v.status == "insufficient"),
-            ),
-        )
-        recommendations = (
-            tuple(recommend_sources(report, recommendation_verdict, as_of=as_of))
-            if partial
-            else ()
-        )
+        recommendations: tuple[Recommendation, ...] = ()
         if partial:
-            # U11 has only worker-history sources, not clause/tie feed remedies.
+            recommendation_verdict = replace(
+                sufficiency,
+                flow=Verdict(
+                    "insufficient",
+                    "; ".join(v.reason for v in verdicts if v.status == "insufficient"),
+                ),
+            )
+            # The catalog has worker-history sources, not clause/tie feed remedies.
             recommendations = tuple(
                 replace(
                     r,
@@ -575,7 +581,7 @@ def run_screen(
                         "and are not remedied by these sources. " + r.market_addition
                     ),
                 )
-                for r in recommendations
+                for r in recommend_sources(report, recommendation_verdict, as_of=as_of)
             )
         references = tuple(_references(view, p) for p in ranked.mutual + ranked.one_way)
         result = ScreenResult(
@@ -600,6 +606,15 @@ def run_screen(
     return result
 
 
+def _lead_summary(pair: RankedPair) -> dict[str, Any]:
+    return {
+        "employer_a_id": pair.employer_a_id,
+        "employer_b_id": pair.employer_b_id,
+        "score": pair.score,
+        "summary": pair.summary,
+    }
+
+
 def _persist(workspace: Workspace, result: ScreenResult) -> None:
     parameters: dict[str, Any] = {
         "version": 1,
@@ -615,24 +630,8 @@ def _persist(workspace: Workspace, result: ScreenResult) -> None:
         "unreliable_count": len(result.unreliable),
         "partial_screen": result.partial_screen,
         "sufficiency": asdict(result.sufficiency),
-        "mutual": [
-            {
-                "employer_a_id": p.employer_a_id,
-                "employer_b_id": p.employer_b_id,
-                "score": p.score,
-                "summary": p.summary,
-            }
-            for p in result.mutual
-        ],
-        "one_way": [
-            {
-                "employer_a_id": p.employer_a_id,
-                "employer_b_id": p.employer_b_id,
-                "score": p.score,
-                "summary": p.summary,
-            }
-            for p in result.one_way
-        ],
+        "mutual": [_lead_summary(p) for p in result.mutual],
+        "one_way": [_lead_summary(p) for p in result.one_way],
         "recommendation_ids": [r.source.id for r in result.recommendations],
     }
     body = json.dumps(

@@ -6,10 +6,10 @@ or either firm's annual external hires / workforce exposure <=5%. These are
 screening checks, not estimates that an explanation caused the observed flow.
 
 Callers supply lawfully held data scoped to the screen's period and market.
-Coordinates are planar kilometres in one common reference system (as in U7),
+Coordinates are planar kilometres in one common reference system (as in flow scoring),
 not latitude/longitude. Occupation shares are comparable normalized fractions.
 External hire rates describe ALL incoming external hires, not just this pair.
-U5 LCA records have no year; the caller must select the appropriate bulk files.
+LCA records have no year; the caller must select the appropriate bulk files.
 No coordinates, occupation shares or external hire rates are inferred from LCA
 worker-position counts or missing pair flows. Non-competes are always untested.
 """

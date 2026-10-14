@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-import duckdb
 from splink import DuckDBAPI, Linker, SettingsCreator
 from splink import blocking_rule_library as br
 from splink import comparison_library as cl
 
 from nopoach.imports.schema import initialize_import_schema
+from nopoach.store import connect
 from nopoach.store.workspace import Workspace
 
 
@@ -70,12 +70,7 @@ def fixed_matches(
     """
     if len(records) < 2:
         return []
-    connection = duckdb.connect(
-        config={
-            "autoinstall_known_extensions": "false",
-            "autoload_known_extensions": "false",
-        }
-    )
+    connection = connect()
     try:
         backend = DuckDBAPI(connection)
         frame = backend.register(list(records))
@@ -125,7 +120,7 @@ class EmployerResolver:
             "SELECT id, employer_id, normalized_name, external_id, external_id_type "
             "FROM employer_aliases ORDER BY id"
         ).fetchall()
-        # Existing collectors may have written U1 employers directly.
+        # Collectors may write employers directly, without aliases.
         existing = self.connection.execute(
             "SELECT id, name, cik FROM employers ORDER BY id"
         ).fetchall()

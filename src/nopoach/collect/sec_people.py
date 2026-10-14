@@ -1,7 +1,8 @@
 """Market-wide SEC executive/director histories through the shared fetch client.
 
 SEC public access/reuse basis: https://www.sec.gov/files/about/webmaster-faq.htm.
-U1 enforces declared contact and the shared ten-request/second fair-access limit.
+The fetch client enforces declared contact and the shared ten-request/second fair-access
+limit.
 Callers supply daily *form* index URLs and the full resolved competitor/parent
 CIK set, before any local employer narrowing. No pair identifiers are accepted.
 Only Forms 3/4/5, Item 5.02 of 8-K, and DEF 14A are fetched from these listings.
@@ -11,8 +12,10 @@ issuer/name scoped: a name alone is not a claim of cross-employer identity.
 Narrative extraction supports explicit named role/date sentences; unsupported
 text is reported as skipped, not treated as evidence that no executive exists.
 Filing dates describe observations, never fabricated employment start dates.
-Original fetched-file receipts remain linked in U3's durable raw_json rows;
-U3 separately records the normalized-row IMPORT receipt with agency_import.
+Original fetched-file receipts remain linked in the import loader's durable raw_json
+rows;
+The import loader separately records the normalized-row IMPORT receipt with
+agency_import.
 """
 
 import logging
@@ -62,12 +65,18 @@ def _identifier(value: str) -> str:
     return str(int(value))
 
 
-def parse_form_index(body: bytes, market_ciks: Iterable[str]) -> list[FilingEntry]:
+def parse_form_index(
+    body: bytes,
+    market_ciks: Iterable[str],
+    *,
+    forms: Iterable[str] = ("DEF 14A", "8-K", "3", "4", "5"),
+) -> list[FilingEntry]:
     """Parse the fixed-column daily form index, filtering only after retrieval."""
     ciks = {_identifier(cik) for cik in market_ciks}
     entries = []
+    form_pattern = "|".join(re.escape(form) for form in forms)
     pattern = re.compile(
-        r"^(DEF 14A|8-K|[345])\s+(.+?)\s+(\d+)\s+"
+        rf"^({form_pattern})\s+(.+?)\s+(\d+)\s+"
         r"(\d{4}-\d{2}-\d{2})\s+(edgar/data/[^\s]+\.txt)\s*$"
     )
     for line in body.decode("utf-8-sig").splitlines():
@@ -82,7 +91,7 @@ def parse_form_index(body: bytes, market_ciks: Iterable[str]) -> list[FilingEntr
     return entries
 
 
-def _text(root: ET.Element, tag: str) -> str:
+def _child_text(root: ET.Element, tag: str) -> str:
     for element in root.iter():
         if element.tag.rsplit("}", 1)[-1] == tag:
             return (element.text or "").strip()
@@ -126,27 +135,27 @@ def _ownership(text: str) -> list[dict[str, Any]]:
         root = ET.fromstring(text)
     except ET.ParseError as exc:
         raise ValueError("Malformed SEC ownership XML") from exc
-    cik = _identifier(_text(root, "issuerCik"))
-    company = _text(root, "issuerName")
+    cik = _identifier(_child_text(root, "issuerCik"))
+    company = _child_text(root, "issuerName")
     if not company:
         raise ValueError("Ownership filing has no issuer name")
     rows = []
     for owner in root.iter():
         if owner.tag.rsplit("}", 1)[-1] != "reportingOwner":
             continue
-        name = _text(owner, "rptOwnerName")
-        key = _identifier(_text(owner, "rptOwnerCik"))
+        name = _child_text(owner, "rptOwnerName")
+        key = _identifier(_child_text(owner, "rptOwnerCik"))
         roles = []
-        if _text(owner, "isOfficer").lower() in {"1", "true"}:
-            roles.append(_text(owner, "officerTitle") or "Officer")
-        if _text(owner, "isDirector").lower() in {"1", "true"}:
+        if _child_text(owner, "isOfficer").lower() in {"1", "true"}:
+            roles.append(_child_text(owner, "officerTitle") or "Officer")
+        if _child_text(owner, "isDirector").lower() in {"1", "true"}:
             roles.append("Director")
         if not name:
             raise ValueError("Ownership filing has no reporting-owner name")
         if roles:
             row = _row(key, name, company, "; ".join(roles), cik=cik)
             row["role_flags"] = roles
-            row["reported_period"] = _text(root, "periodOfReport")
+            row["reported_period"] = _child_text(root, "periodOfReport")
             row["date_basis"] = "filing_observation"
             rows.append(row)
     return rows
@@ -271,7 +280,7 @@ def _biographies(text: str, cik: str, company: str) -> list[dict[str, Any]]:
 def parse_filing(
     body: bytes, *, form_type: str, filed_on: str, cik: str, employer_name: str
 ) -> list[dict[str, Any]]:
-    """Extract canonical U3 rows, preserving source-specific observations."""
+    """Extract canonical import rows, preserving source-specific observations."""
     if form_type not in FORMS:
         raise ValueError("Unsupported SEC person-history form")
     text = _primary_document(body, form_type)

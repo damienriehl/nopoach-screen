@@ -9,8 +9,8 @@ retrieved before locally matching the full market's EIN set (including parents).
 Part VII is a tax-year observation, not an exact appointment/departure date.
 Year-precision dates retain that distinction in date_basis and tax_year. Names
 are EIN-scoped identities; equal names at separate nonprofits are not merged
-without U3's independent identity evidence. Source-file receipts are linked in
-U3 raw_json, alongside U3's separate normalized-row import provenance.
+without independent identity evidence. Source-file receipts are linked in
+imported raw_json, alongside separate normalized-row import provenance.
 """
 
 import csv
@@ -23,7 +23,12 @@ from typing import Any
 from urllib.parse import urljoin
 
 from nopoach.collect.fetch import FetchClient
-from nopoach.collect.sec_people import CollectionReport, _import_fetched, _row, _text
+from nopoach.collect.sec_people import (
+    CollectionReport,
+    _child_text,
+    _import_fetched,
+    _row,
+)
 from nopoach.store.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -50,14 +55,14 @@ def parse_return(body: bytes) -> list[dict[str, Any]]:
     )
     if header is None:
         raise ValueError("Form 990 has no ReturnHeader")
-    ein = _text(header, "EIN")
-    year = _text(header, "TaxYr")
+    ein = _child_text(header, "EIN")
+    year = _child_text(header, "TaxYr")
     name = " ".join(
         filter(
             None,
             [
-                _text(header, "BusinessNameLine1Txt"),
-                _text(header, "BusinessNameLine2Txt"),
+                _child_text(header, "BusinessNameLine1Txt"),
+                _child_text(header, "BusinessNameLine2Txt"),
             ],
         )
     )
@@ -70,14 +75,14 @@ def parse_return(body: bytes) -> list[dict[str, Any]]:
         roles = [
             role
             for role, tag in _ROLE_TAGS.items()
-            if _text(group, tag).lower() in {"true", "1", "x"}
+            if _child_text(group, tag).lower() in {"true", "1", "x"}
         ]
         if not roles:
             continue
-        person = _text(group, "PersonNm")
+        person = _child_text(group, "PersonNm")
         if not person:
             raise ValueError("Form 990 Part VII person has no name")
-        title = _text(group, "TitleTxt") or "; ".join(roles)
+        title = _child_text(group, "TitleTxt") or "; ".join(roles)
         row = _row(f"{_ein(ein)}:{person.casefold()}", person, name, title)
         row.update(
             {
@@ -117,7 +122,7 @@ def collect_market(
 
     Supports IRS CSV index columns and historical FilingsYYYY JSON indexes.
     The fetch client must use this workspace's provenance log. An explicit URL
-    in an index is still subject to U1 host policy, including redirect targets.
+    in an index is still subject to the fetch host policy, including redirect targets.
     """
     if fetch.provenance is not workspace.provenance:
         raise ValueError("Fetch client must use the workspace provenance log")

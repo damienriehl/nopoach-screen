@@ -8,6 +8,7 @@ public documents stay in the user's external workspace, never in the repo.
 
 import json
 import re
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Literal
 
 from nopoach.market.define import Employer
+from nopoach.rank.pairs import pair_key
 from nopoach.store.provenance import ProvenanceRecord
 from nopoach.store.workspace import Workspace
 
@@ -342,7 +344,7 @@ def store_document(
     *,
     franchisees: Sequence[Employer] = (),
 ) -> tuple[Clause, ...]:
-    """Persist structured evidence beside U1 filings/clauses, without schema edits.
+    """Persist structured evidence beside workspace filings/clauses.
 
     clause_details JSON version 1 stores dates, bindings, resolved parties,
     source receipt and offsets in the retained full-text document. Duplicate
@@ -408,9 +410,7 @@ def _decode(encoded: str) -> Clause:
         raise ValueError("Unsupported clause evidence version")
     data = payload["clause"]
     data["filed_on"] = date.fromisoformat(data["filed_on"])
-    receipt = data["provenance"]
-    receipt["collected_at"] = datetime.fromisoformat(receipt["collected_at"])
-    data["provenance"] = ProvenanceRecord(**receipt)
+    data["provenance"] = ProvenanceRecord.from_json(data["provenance"])
     for key in ("parties", "employer_ids", "bound_employer_ids", "carve_outs"):
         data[key] = tuple(data[key])
     return Clause(**data)
@@ -419,17 +419,29 @@ def _decode(encoded: str) -> Clause:
 def score_pair(
     workspace: Workspace, employer_a_id: str, employer_b_id: str
 ) -> ClauseSignal:
-    """Return traceable clause evidence; multi-signal ranking belongs to U10."""
+    """Return traceable clause evidence; multi-signal ranking is separate."""
+    return score_pairs(workspace, ((employer_a_id, employer_b_id),))[0]
+
+
+def score_pairs(
+    workspace: Workspace, pairs: Sequence[tuple[str, str]]
+) -> tuple[ClauseSignal, ...]:
+    """Decode filed evidence once, keeping clause-ID order for each pair."""
+    if not pairs:
+        return ()
     _initialize(workspace)
-    pair = tuple(sorted((employer_a_id, employer_b_id)))
-    clauses = tuple(
-        clause
-        for (encoded,) in workspace.connection.execute(
-            "SELECT details_json FROM clause_details ORDER BY clause_id"
-        ).fetchall()
-        if pair in (clause := _decode(encoded)).pairs
+    buckets: dict[tuple[str, str], list[Clause]] = defaultdict(list)
+    for (encoded,) in workspace.connection.execute(
+        "SELECT details_json FROM clause_details ORDER BY clause_id"
+    ).fetchall():
+        clause = _decode(encoded)
+        for pair in clause.pairs:
+            buckets[pair_key(*pair)].append(clause)
+    return tuple(
+        ClauseSignal(*pair, tuple(buckets.get(pair, ())))
+        for a, b in pairs
+        for pair in (pair_key(a, b),)
     )
-    return ClauseSignal(pair[0], pair[1], clauses)
 
 
 @dataclass(frozen=True)

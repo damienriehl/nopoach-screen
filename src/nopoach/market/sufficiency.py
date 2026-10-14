@@ -1,10 +1,10 @@
 """Explain per-signal sufficiency and mark each affected employer pair.
 
 Thresholds are provisional calibration starting points, not proof of an
-agreement. U7 supplies effective directional opportunity samples across the
+agreement. Flow scoring supplies effective directional opportunity samples across the
 window (after weighting), not just the potentially suppressed A->B moves:
 using the suspicious outcome as the sample size would hide a zero-flow lead.
-U7 owns shrinkage/placebos/BH (KTD7); this module only owns reliability gates.
+Flow scoring owns shrinkage/placebos/BH (KTD7); this module only owns reliability gates.
 """
 
 from collections.abc import Mapping, Sequence

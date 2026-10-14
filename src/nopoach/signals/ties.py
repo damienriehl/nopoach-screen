@@ -1,4 +1,4 @@
-"""Explainable leadership links from resolved U3/U4 positions, without collection.
+"""Explainable leadership links from imported and filed positions.
 
 Scores are screening heuristics, not calibrated probabilities: shared directors
 in the requested period weigh 4, executive moves 2, sequential leadership links
@@ -6,11 +6,11 @@ in the requested period weigh 4, executive moves 2, sequential leadership links
 weigh 1. Recency is 1 / (1 + years since the last tie date), measured at period
 end with 365.25 days/year; undated links receive .5. Every component is returned.
 
-Year/month bounds retain U3's precision and indicate reported-period overlap,
+Year/month bounds retain imported date precision and indicate reported-period overlap,
 not proof of exact-day service. Missing bounds are never extended indefinitely:
 a filing observation can bound an explicitly reported tenure or supply a dated
 snapshot. With no dated evidence, shared leadership is retained as an undated
-link, without claiming overlap or a move. Identity reconciliation belongs to U3.
+link, without claiming overlap or a move. The import loader reconciles identities.
 Results are read-only; dossiers can serialize the returned dataclasses and follow
 position IDs, import row numbers, and original filing receipts in raw records.
 """
@@ -19,11 +19,13 @@ import json
 import math
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from itertools import product
 from typing import Any
 
+from nopoach.rank.pairs import pair_key
 from nopoach.store.workspace import Workspace
 
 
@@ -75,14 +77,11 @@ class PairTies:
     ties: tuple[Tie, ...]
 
 
-def _positions(workspace: Workspace) -> list[PositionEvidence]:
+def positions(workspace: Workspace) -> list[PositionEvidence]:
     connection = workspace.connection
     records: dict[str, list[RecordEvidence]] = defaultdict(list)
-    # U1 workspaces may not yet have U3's lazily created import tables.
-    if connection.execute(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_name = 'imported_rows'"
-    ).fetchall():
+    # Import tables are created lazily.
+    if "imported_rows" in workspace.table_names():
         for position_id, import_id, number, provenance, raw in connection.execute(
             "SELECT position_id, import_id, row_number, provenance_id, raw_json "
             "FROM imported_rows WHERE position_id IS NOT NULL "
@@ -137,7 +136,7 @@ def _positions(workspace: Workspace) -> list[PositionEvidence]:
     return result
 
 
-def _board(position: PositionEvidence) -> bool:
+def board(position: PositionEvidence) -> bool:
     flags = [
         str(flag).casefold()
         for record in position.records
@@ -158,7 +157,7 @@ def _board(position: PositionEvidence) -> bool:
     )
 
 
-def _executive(position: PositionEvidence) -> bool:
+def executive(position: PositionEvidence) -> bool:
     return bool(
         re.search(
             r"\b(?:ceo|cfo|coo|cto|cio|chro|chief\s+[\w\s]+?\s+officer|"
@@ -199,6 +198,7 @@ def score_pair(
     *,
     start_date: date,
     end_date: date,
+    precomputed_positions: Sequence[PositionEvidence] | None = None,
 ) -> PairTies:
     """Score one resolved pair as of period end; retain all supporting positions.
 
@@ -212,14 +212,18 @@ def score_pair(
         raise ValueError("end_date before start_date")
     if employer_a_id == employer_b_id:
         raise ValueError("A pair requires two distinct employers")
-    employer_a_id, employer_b_id = sorted((employer_a_id, employer_b_id))
-    positions = [
+    employer_a_id, employer_b_id = pair_key(employer_a_id, employer_b_id)
+    eligible_positions = [
         p
-        for p in _positions(workspace)
+        for p in (
+            positions(workspace)
+            if precomputed_positions is None
+            else precomputed_positions
+        )
         if (span := _span(p)) is None or span[0] <= end_date
     ]
-    left = [p for p in positions if p.employer_id == employer_a_id]
-    right = [p for p in positions if p.employer_id == employer_b_id]
+    left = [p for p in eligible_positions if p.employer_id == employer_a_id]
+    right = [p for p in eligible_positions if p.employer_id == employer_b_id]
     ties: dict[
         tuple[str, tuple[str, ...], str | None, date | None, date | None], Tie
     ] = {}
@@ -291,10 +295,10 @@ def score_pair(
     for a, b in product(left, right):
         if a.person_id != b.person_id:
             continue
-        if not ((_board(a) or _executive(a)) and (_board(b) or _executive(b))):
+        if not ((board(a) or executive(a)) and (board(b) or executive(b))):
             continue
         overlap = _overlap(a, b)
-        if _board(a) and _board(b) and overlap:
+        if board(a) and board(b) and overlap:
             add("shared_director", (a, b), overlap)
             continue
         earlier, later = a, b
@@ -307,7 +311,7 @@ def score_pair(
         ):
             kind = (
                 "executive_move"
-                if _executive(earlier) and _executive(later)
+                if executive(earlier) and executive(later)
                 else "sequential_link"
             )
             add(kind, (earlier, later), (earlier.end_date, later.start_date))
@@ -315,10 +319,10 @@ def score_pair(
             add("leadership_link", (a, b), overlap)
 
     history: dict[str, list[PositionEvidence]] = defaultdict(list)
-    for p in positions:
+    for p in eligible_positions:
         history[p.person_id].append(p)
     for a, b in product(left, right):
-        if a.person_id == b.person_id or not (_executive(a) and _executive(b)):
+        if a.person_id == b.person_id or not (executive(a) and executive(b)):
             continue
         if a.start_date is None or b.start_date is None:
             continue

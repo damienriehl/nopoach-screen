@@ -53,10 +53,14 @@ def break_candidates(observed: np.ndarray, expected: np.ndarray) -> np.ndarray:
 
 
 def detect_break(
-    years: Sequence[int], observed: Sequence[float], expected: Sequence[float]
+    years: Sequence[int],
+    observed: Sequence[float],
+    expected: Sequence[float],
+    *,
+    candidates: np.ndarray | None = None,
 ) -> FlowBreak | None:
     y, e = np.asarray(observed, dtype=float), np.asarray(expected, dtype=float)
-    scores = break_candidates(y, e)[0]
+    scores = (break_candidates(y, e) if candidates is None else candidates)[0]
     if not len(scores) or float(scores.max()) <= 0:
         return None
     i = int(scores.argmax())

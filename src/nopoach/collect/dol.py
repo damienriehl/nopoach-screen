@@ -8,171 +8,23 @@ Metro assignment requires the caller's geography crosswalk; city names alone
 are not metro codes. An unmapped worksite retains a None metro.
 """
 
-import csv
-import io
 import json
-import posixpath
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from datetime import date, datetime
+from decimal import Decimal
 from hashlib import sha256
 from typing import Literal
-from urllib.parse import unquote, urlsplit
-from xml.etree import ElementTree
-from zipfile import ZipFile, is_zipfile
 
 from nopoach.collect.fetch import FetchClient, FetchedResponse
+from nopoach.collect.tables import SourceSchemaError as SourceSchemaError
+from nopoach.collect.tables import count, filename, number, require, tables
 from nopoach.resolve.employers import EmployerResolver
 from nopoach.store.provenance import ProvenanceRecord
 from nopoach.store.workspace import Workspace
 
 DOL_HOSTS = {"www.dol.gov": 1.0, "dol.gov": 1.0}
 MetroLookup = Callable[[str, str, str], str | None]
-_XML_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
-_EVENT_COLUMNS = {
-    "DECISION_DATE",
-    "CASE_DECISION_DATE",
-    "EMPLOYMENT_BEGIN_DATE",
-    "EMPLOYMENT_END_DATE",
-    "BEGIN_DATE",
-    "END_DATE",
-}
-
-
-class SourceSchemaError(ValueError):
-    """A bulk source no longer supplies a required column."""
-
-
-@dataclass(frozen=True)
-class _Table:
-    filename: str
-    columns: tuple[str, ...]
-    rows: tuple[dict[str, str], ...]
-
-
-def _table(filename: str, rows: Sequence[Sequence[str]]) -> _Table:
-    if not rows:
-        return _Table(filename, (), ())
-    columns = tuple(value.strip().lstrip("\ufeff") for value in rows[0])
-    return _Table(
-        filename,
-        columns,
-        tuple(
-            {
-                column: row[index].strip() if index < len(row) else ""
-                for index, column in enumerate(columns)
-            }
-            for row in rows[1:]
-            if any(value.strip() for value in row)
-        ),
-    )
-
-
-def _xlsx_tables(archive: ZipFile, filename: str) -> Iterator[_Table]:
-    epoch = date(1899, 12, 30)
-    if "xl/workbook.xml" in archive.namelist():
-        workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-        properties = workbook.find(f"{_XML_NS}workbookPr")
-        if properties is not None and properties.get("date1904") in {"1", "true"}:
-            epoch = date(1904, 1, 1)
-    strings: list[str] = []
-    if "xl/sharedStrings.xml" in archive.namelist():
-        root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
-        strings = ["".join(node.itertext()) for node in root.findall(f"{_XML_NS}si")]
-    for sheet in sorted(archive.namelist()):
-        if not sheet.startswith("xl/worksheets/") or not sheet.endswith(".xml"):
-            continue
-        rows: list[list[str]] = []
-        root = ElementTree.fromstring(archive.read(sheet))
-        for element in root.iter(f"{_XML_NS}row"):
-            cells: dict[int, str] = {}
-            for cell in element.findall(f"{_XML_NS}c"):
-                reference = cell.attrib["r"]
-                index = 0
-                for letter in reference:
-                    if letter.isalpha():
-                        index = index * 26 + ord(letter.upper()) - ord("A") + 1
-                value = cell.findtext(f"{_XML_NS}v", default="")
-                if cell.get("t") == "s":
-                    value = strings[int(value)]
-                elif cell.get("t") == "inlineStr":
-                    value = "".join(
-                        node.text or "" for node in cell.iter(f"{_XML_NS}t")
-                    )
-                elif (
-                    value
-                    and rows
-                    and index <= len(rows[0])
-                    and rows[0][index - 1] in _EVENT_COLUMNS
-                    and cell.get("t") in {None, "n"}
-                ):
-                    # XLSX stores actual date cells as days in its workbook epoch.
-                    value = (epoch + timedelta(days=float(value))).isoformat()
-                cells[index - 1] = value
-            if cells:
-                rows.append([cells.get(index, "") for index in range(max(cells) + 1)])
-        yield _table(f"{filename}:{sheet}", rows)
-
-
-def _tables(body: bytes, filename: str) -> Iterator[_Table]:
-    """Read public CSV/TSV, zipped tables, and XLSX without extra dependencies."""
-    stream = io.BytesIO(body)
-    if is_zipfile(stream):
-        with ZipFile(stream) as archive:
-            if any(name.startswith("xl/worksheets/") for name in archive.namelist()):
-                yield from _xlsx_tables(archive, filename)
-            else:
-                members = [
-                    name
-                    for name in archive.namelist()
-                    if name.lower().endswith((".csv", ".txt", ".xlsx"))
-                ]
-                if not members:
-                    raise SourceSchemaError(f"{filename}: no CSV/TSV/XLSX data table")
-                for name in members:
-                    yield from _tables(archive.read(name), f"{filename}:{name}")
-        return
-    text = body.decode("utf-8-sig")
-    header = text.splitlines()[0] if text.splitlines() else ""
-    delimiter = "\t" if "\t" in header else ","
-    yield _table(filename, list(csv.reader(io.StringIO(text), delimiter=delimiter)))
-
-
-def _require(table: _Table, columns: Sequence[str]) -> None:
-    for column in columns:
-        if column not in table.columns:
-            raise SourceSchemaError(
-                f"{table.filename}: missing required column {column}"
-            )
-
-
-def _number(value: str, filename: str, column: str) -> Decimal | None:
-    # BLS nondisclosure/top-coding symbols are unknown, never zero.
-    if value.strip() in {"", "*", "**", "#", "~", "N/A"}:
-        return None
-    try:
-        number = Decimal(value.replace(",", ""))
-        if not number.is_finite():
-            raise InvalidOperation
-        return number
-    except InvalidOperation as error:
-        raise ValueError(
-            f"{filename}: invalid numeric value in column {column}"
-        ) from error
-
-
-def _count(value: str, filename: str, column: str) -> int | None:
-    number = _number(value, filename, column)
-    if number is None:
-        return None
-    if number != number.to_integral_value() or number < 0:
-        raise ValueError(f"{filename}: invalid employment count in column {column}")
-    return int(number)
-
-
-def _filename(response: FetchedResponse) -> str:
-    return unquote(posixpath.basename(urlsplit(response.provenance.url).path))
 
 
 @dataclass(frozen=True)
@@ -237,24 +89,22 @@ def parse_dol(
     ]
     if program == "LCA":
         required.append("TOTAL_WORKER_POSITIONS")
-    tables = list(_tables(response.body, _filename(response)))
+    source_tables = list(tables(response.body, filename(response)))
     # Check schema across the file before writing any employer-resolution facts.
-    for table in tables:
-        _require(table, required)
+    for table in source_tables:
+        require(table, required)
     records = []
-    for table in tables:
+    for table in source_tables:
         for row in table.rows:
             worksite_state = row["WORKSITE_STATE"].upper()
             if state and worksite_state != state.upper():
                 continue
-            low = _number(
+            low = number(
                 row[f"{wage_prefix}_FROM"], table.filename, f"{wage_prefix}_FROM"
             )
-            high = _number(
-                row[f"{wage_prefix}_TO"], table.filename, f"{wage_prefix}_TO"
-            )
+            high = number(row[f"{wage_prefix}_TO"], table.filename, f"{wage_prefix}_TO")
             workers = (
-                _count(
+                count(
                     row["TOTAL_WORKER_POSITIONS"],
                     table.filename,
                     "TOTAL_WORKER_POSITIONS",
@@ -364,8 +214,6 @@ def load_dol_records(workspace: Workspace) -> tuple[DolRecord, ...]:
             data[key] = Decimal(data[key]) if data[key] is not None else None
         for key in ("decision_date", "employment_begin_date", "employment_end_date"):
             data[key] = date.fromisoformat(data[key]) if data[key] else None
-        receipt = data["provenance"]
-        receipt["collected_at"] = datetime.fromisoformat(receipt["collected_at"])
-        data["provenance"] = ProvenanceRecord(**receipt)
+        data["provenance"] = ProvenanceRecord.from_json(data["provenance"])
         result.append(DolRecord(**data))
     return tuple(result)

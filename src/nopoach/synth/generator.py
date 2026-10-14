@@ -1,6 +1,6 @@
 """Seeded gravity-model employment histories with separately retained truth.
 
-Employment rows always enter storage through U3's import_records(). Coverage
+Employment rows always enter storage through import_records(). Coverage
 is a stable person/employer/occupation mask of whole spells, not a new draw
 each year: a missing employer can obscure one endpoint of an observed move.
 No network or real data is used.
@@ -198,9 +198,9 @@ def generate_market(scenario: Scenario, *, seed: int) -> GeneratedMarket:
 
 
 def import_market(workspace: Workspace, market: GeneratedMarket) -> ImportResult:
-    """Import only visible employment spells via U3, preserving synthetic labels.
+    """Import only visible employment spells, preserving synthetic labels.
 
-    AE4's invented filing/clause facts use U1's existing tables and a separate
+    AE4's invented filing/clause facts use the existing workspace tables and a separate
     synthetic receipt hashing the clause fixture. They do not affect worker
     histories. Employers absent from visible data have no imported filing.
     """

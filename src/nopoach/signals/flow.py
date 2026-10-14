@@ -1,7 +1,7 @@
-"""Directional, evidence-backed missing worker flow (U7).
+"""Directional, evidence-backed missing worker flow.
 
-The caller supplies U3-resolved positions, crosswalked position geographies,
-planar employer coordinates in kilometres, occupation shares, and U6 coverage.
+The caller supplies resolved positions, crosswalked position geographies,
+planar employer coordinates in kilometres, occupation shares, and market coverage.
 No geography is guessed from free-text locations. PPML fits all ordered pairs
 and years with separate origin/year and destination/year effects: reversing a
 pair is a different observation, never a symmetric pooling of move counts.
@@ -207,7 +207,12 @@ def build_moves(
     return tuple(moves)
 
 
-def _statistics(y: np.ndarray, e: np.ndarray, prior: float) -> np.ndarray:
+def _statistics(
+    y: np.ndarray,
+    e: np.ndarray,
+    prior: float,
+    candidates: np.ndarray | None = None,
+) -> np.ndarray:
     totals = np.atleast_2d(y).sum(axis=1)
     expected = float(e.sum())
     ratio = (totals + prior) / (expected + prior)
@@ -215,7 +220,7 @@ def _statistics(y: np.ndarray, e: np.ndarray, prior: float) -> np.ndarray:
     # observed and placebo series. Break scan includes candidate selection.
     suppressed = 2 * (xlogy(totals, ratio) - expected * (ratio - 1))
     suppressed = np.where(ratio < 1, np.maximum(0, suppressed), 0)
-    breaks = break_candidates(y, e)
+    breaks = break_candidates(y, e) if candidates is None else candidates
     return np.asarray(np.maximum(suppressed, breaks.max(axis=1)))
 
 
@@ -294,7 +299,7 @@ def screen_flow(
                     source=a.id,
                     destination=b.id,
                     year=year,
-                    observed=len(counts[a.id, b.id, year]),
+                    observed=len(counts.get((a.id, b.id, year), ())),
                     overlap=overlap,
                     log_overlap=log(overlap) if overlap else 0,
                     distance_km=dist(a.location_km, b.location_km),
@@ -321,10 +326,11 @@ def screen_flow(
             group.observed.to_numpy(dtype=float),
             group.expected.to_numpy(dtype=float),
         )
-        change = detect_break(years, y, e)
+        candidates = break_candidates(y, e)
+        change = detect_break(years, y, e, candidates=candidates)
         start = change.split_index if change else 0
         ratio = shrink_ratio(float(y[start:].sum()), float(e[start:].sum()), prior)
-        statistic = float(_statistics(y, e, prior)[0])
+        statistic = float(_statistics(y, e, prior, candidates)[0])
         placebo = rng.poisson(e, size=(placebo_count, len(e)))
         pvalue = placebo_pvalue(statistic, _statistics(placebo, e, prior))
         annual = tuple(
@@ -333,7 +339,7 @@ def screen_flow(
                 int(y[i]),
                 float(e[i]),
                 shrink_ratio(float(y[i]), float(e[i]), prior),
-                tuple(counts[source, destination, year]),
+                tuple(counts.get((source, destination, year), ())),
             )
             for i, year in enumerate(years)
         )

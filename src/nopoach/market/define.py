@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def soc_code(code: str) -> str:
-    """Map an O*NET detailed code to the SOC used by U3/U5."""
+    """Map an O*NET detailed code to the SOC used by imports and DOL disclosures."""
     if not re.fullmatch(r"\d{2}-\d{4}(?:\.\d{2})?", code):
         raise ValueError("Occupation must use SOC NN-NNNN or O*NET NN-NNNN.NN")
     return code[:7]
@@ -71,7 +71,7 @@ class Market:
         )
 
     def to_json(self) -> str:
-        """Serializable state for U1 screens.parameters_json, with no DB write."""
+        """Serializable state for screens.parameters_json, with no DB write."""
         return json.dumps(
             {
                 "version": 1,

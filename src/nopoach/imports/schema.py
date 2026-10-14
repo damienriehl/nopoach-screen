@@ -15,7 +15,7 @@ callers may declare a shared provider namespace when keys really are shared.
 Use template_csv() for the CSV header; Parquet uses the same nullable string
 columns. import_records() is the common programmatic/UI/synthetic entry point.
 
-Companion tables extend U1 facts without duplicating employers/people/positions.
+Companion tables extend workspace facts without duplicating employers/people/positions.
 Raw input and row number remain available for accepted AND rejected rows.
 """
 
@@ -93,7 +93,7 @@ def template_parquet() -> bytes:
 
 
 def initialize_import_schema(connection: duckdb.DuckDBPyConnection) -> None:
-    """Lazily extend the existing workspace; safe on reopening older U1 data."""
+    """Lazily extend the existing workspace; safe on reopening older workspace data."""
     classes = ",".join(f"'{item.value}'" for item in ProvenanceClass)
     connection.execute(f"""
         CREATE TABLE IF NOT EXISTS imports (

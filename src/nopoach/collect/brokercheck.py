@@ -10,10 +10,11 @@ retrieval basis is asserted here, and this module contains no network path.
 Permitted-use basis for this adapter: the agency supplies an extract it lawfully
 holds via regulatory channels (R13). That declaration remains the agency's
 responsibility; a provenance label is not a certification of lawful possession.
-CSV/Parquet use U3's documented dates/precision and column mapper. The default
-regulator layout is demonstrated only with synthetic records. An individual CRD
+CSV/Parquet use the import loader's documented dates/precision and column mapper.
+The default regulator layout is demonstrated only with synthetic records. A CRD
 identifies a person across firms, and firm CRDs identify the employers. Original
-file bytes, import method, source, and collection date are retained by U3.
+file bytes, import method, source, and collection date are retained by the import
+loader.
 """
 
 from collections.abc import Mapping
@@ -40,12 +41,12 @@ def import_regulator_extract(
     source: str = "FINRA regulator-supplied extract",
     column_map: Mapping[str, str] | None = None,
 ) -> ImportResult:
-    """Import a regulator extract via U3; collection permission is not assumed.
+    """Import a regulator extract without assuming collection permission.
 
     Include employer_id_type=crd in files to retain explicit firm-ID typing.
-    Without it U3 uses the source name as the employer ID namespace, avoiding an
-    assertion that an untyped provider ID is globally a CRD. Person-key namespace
-    is explicitly FINRA individual CRD for this adapter's documented layout.
+    Without it the import loader uses the source name as the employer ID namespace,
+    avoiding an assertion that an untyped provider ID is globally a CRD.
+    Person-key namespace is FINRA individual CRD for the documented layout.
     """
     return import_file(
         workspace,
@@ -58,7 +59,7 @@ def import_regulator_extract(
 
 
 def coverage_report() -> dict[str, Any]:
-    """Coverage metadata for the caller's market report (U6 owns the panel)."""
+    """Coverage metadata for the market report; market coverage owns the panel."""
     return {
         "source": "FINRA BrokerCheck",
         "automated_collection": False,

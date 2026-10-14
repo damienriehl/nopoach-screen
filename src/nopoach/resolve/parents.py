@@ -1,4 +1,4 @@
-"""Dated parent links on U1's table, with provenance and lawyer overrides.
+"""Dated parent links on the workspace table, with provenance and lawyer overrides.
 
 Intervals are inclusive. The most recently recorded active manual override wins;
 otherwise the most recent effective SEC link wins. Resolution keeps the original

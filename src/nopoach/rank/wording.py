@@ -1,4 +1,4 @@
-"""Central wording for ranking leads and describing explanation checks (U10)."""
+"""Central wording for ranking leads and describing explanation checks."""
 
 from collections.abc import Sequence
 from typing import Literal

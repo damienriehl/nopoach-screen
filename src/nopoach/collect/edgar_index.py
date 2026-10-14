@@ -1,16 +1,16 @@
 """Index-selected SEC contract exhibits, collected for a whole labor market.
 
-Uses U4's daily form-index reader without modifying its person-history forms.
+Uses the shared daily form-index reader without modifying its person-history forms.
 Fetches filing detail listings, then only EX-10/EX-2 and primary 8-K bodies;
 never downloads the full-filing daily feed. The caller supplies the full resolved
 competitor set AND parents, before any local employer-list narrowing (KTD4).
-All HTTP passes through U1's shared SEC fair-access budget and receipt log.
+All HTTP passes through the shared SEC fair-access budget and receipt log.
 """
 
 import logging
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, timedelta
 from html.parser import HTMLParser
 from urllib.parse import urljoin
@@ -61,23 +61,18 @@ def daily_index_urls(start: date, end: date) -> tuple[str, ...]:
 
 
 def parse_form_index(body: bytes, market_ciks: Iterable[str]) -> list[FilingEntry]:
-    """Adapt U4's fixed-column reader to U8 forms, preserving original form type.
-
-    Only the form column is normalized for the shared parser; company/CIK/date/
-    archive path parsing and local market membership remain owned by that reader.
-    """
-    entries: list[FilingEntry] = []
+    """Read contract filing forms with the shared fixed-column reader."""
     ciks = tuple(market_ciks)
     pattern = re.compile(r"^(8-K|10-K|10-Q|S-4|DEFM14A)\s+")
-    for line in body.decode("utf-8-sig").splitlines():
-        match = pattern.match(line.strip())
-        if match:
-            normalized = pattern.sub("8-K ", line.strip(), count=1)
-            entries.extend(
-                replace(entry, form_type=match[1])
-                for entry in read_people_index(normalized.encode(), ciks)
-            )
-    return entries
+    lines = [
+        line.strip()
+        for line in body.decode("utf-8-sig").splitlines()
+        if pattern.match(line.strip())
+    ]
+    # Preserve the reader's lazy CIK validation when no contract form is present.
+    if not lines:
+        return []
+    return read_people_index("\n".join(lines).encode(), ciks, forms=FORMS)
 
 
 class _DocumentTable(HTMLParser):

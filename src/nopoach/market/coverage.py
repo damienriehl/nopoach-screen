@@ -1,10 +1,10 @@
-"""KTD16 estimates and annual, person-deduplicated coverage of a defined market.
+"""Workforce estimates and annual, person-deduplicated coverage of a defined market.
 
 Headcount inputs already describe the selected occupations/geography/year,
 except company counts, which need national industry staffing and an explicit
-geography allocation. U4 has no company employee-count extractor: accept SEC
-10-K/Form 990 counts from the caller, without adding collection here.
-Workers are annual observations with U3-resolved IDs/SOC and caller-crosswalked
+geography allocation. The SEC people collector has no employee-count extractor:
+accept SEC 10-K/Form 990 counts from the caller, without adding collection here.
+Workers are annual observations with resolved IDs/SOC and caller-crosswalked
 geographies; LCA positions are never added to the visible-worker numerator.
 """
 
@@ -97,7 +97,7 @@ def estimate_workforce(
 
     Company allocation uses a declared +/-50% sensitivity band, propagated
     through any company-count bounds; it is not a statistical confidence interval.
-    LCA must be the caller's selected-year bulk records: U5 records have no year.
+    LCA must be the caller's selected-year bulk records: DOL records have no year.
     Its requested positions form a proxy with an unbounded upper uncertainty,
     never a claim of actual employer headcount or visa-worker employment.
     """
@@ -320,7 +320,7 @@ def store_workforce_input(
     as_of: date,
     provenance_id: str,
 ) -> str:
-    """Persist a dated KTD16 input; shares cover the declared market's SOC set.
+    """Persist a dated workforce input; shares cover the declared market's SOC set.
 
     Company counts are firm-wide. Staffing shares are BLS-derived fractions;
     geography shares are explicit allocations, never inferred from visible jobs.
@@ -355,7 +355,7 @@ def store_workforce_input(
 def workspace_estimates(
     workspace: Workspace, market: Market, *, as_of: date | None = None
 ) -> tuple[WorkforceEstimate, ...]:
-    """Apply KTD16 to the latest persisted inputs and period-dated LCA records."""
+    """Estimate workforces from the latest inputs and period-dated LCA records."""
     inputs: dict[tuple[str, int], dict[str, Headcount]] = defaultdict(dict)
     for row in workspace.connection.execute(
         "SELECT employer_id, year, occupation_codes_json, geography_kind, "

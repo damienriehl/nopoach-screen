@@ -28,7 +28,8 @@ def create_app(
     """Collectors are host-configured lawful public feeds, never account clients.
 
     Without feed configuration, screen the stored workspace. Each source writes
-    its own U1 receipts; failures retain other sources and permit targeted retry.
+    its own collection receipts; failures retain other sources and permit targeted
+    retry.
     """
     session = Session(collectors=dict(collectors or {}))
 

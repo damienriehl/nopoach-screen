@@ -31,7 +31,7 @@ from nopoach.resolve.employers import EmployerResolver, normalize_name
 from nopoach.resolve.people import PersonResolver
 from nopoach.store.workspace import Workspace
 
-# Optional geography columns extend the loader without changing U3 templates.
+# Optional geography columns extend the loader without changing import templates.
 _GEO_COLUMNS = ("cbsa", "latitude", "longitude")
 
 

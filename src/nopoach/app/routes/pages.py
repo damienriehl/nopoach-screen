@@ -85,21 +85,19 @@ class Session:
                 self.result = run_screen(
                     workspace, market, accept_partial=accept_partial
                 )
-            self.status = "Scored"
-            self.status = (
-                "Failed"
-                if self.failures and not accept_partial
-                else (
-                    "Insufficient"
-                    if self.result.partial_screen and not accept_partial
-                    else "Ready"
-                )
-            )
+            self.status = self._finished_status(self.result, accept_partial)
             self.progress = "Screen finished. Review coverage and sufficiency."
         except Exception as exc:
             self.failures["Screen scoring"] = str(exc)
             self.progress = "Scoring failed. Stored records and prior results are kept."
             self.status = "Failed"
+
+    def _finished_status(self, result: ScreenResult, accept_partial: bool) -> str:
+        if self.failures and not accept_partial:
+            return "Failed"
+        if result.partial_screen and not accept_partial:
+            return "Insufficient"
+        return "Ready"
 
 
 def state(request: Request) -> Session:
@@ -397,7 +395,7 @@ async def preview_import(request: Request) -> HTMLResponse:
         if len(columns) != len(set(columns)):
             raise ValueError("Duplicate input column names")
         session.upload, session.suffix, session.columns = body, suffix, columns
-        # Use U3's mapper, while allowing missing/ambiguous mappings to be edited.
+        # Use the import mapper; missing/ambiguous mappings remain editable.
         try:
             session.suggested = column_mapping(columns)
         except ValueError:
@@ -535,11 +533,8 @@ def dossier(request: Request, a: str, b: str) -> HTMLResponse:
             for r in session.result.references
             if (r.employer_a_id, r.employer_b_id) == (a, b)
         )
-        sources = [
-            r
-            for r in workspace.provenance.records()
-            if r.id in reference.provenance_ids
-        ]
+        provenance_ids = set(reference.provenance_ids)
+        sources = [r for r in workspace.provenance.records() if r.id in provenance_ids]
         records = workspace.connection.execute(
             "SELECT p.id, people.name, p.person_id, employers.name, p.title, "
             "p.start_date, p.end_date, p.start_precision, p.end_precision, "
@@ -550,7 +545,7 @@ def dossier(request: Request, a: str, b: str) -> HTMLResponse:
             "WHERE p.id IN (SELECT unnest(?)) ORDER BY p.id",
             [list(reference.position_ids)],
         ).fetchall()
-        tables = {r[0] for r in workspace.connection.execute("SHOW TABLES").fetchall()}
+        tables = workspace.table_names()
         imports = (
             workspace.connection.execute(
                 "SELECT DISTINCT source, provenance_class FROM imports ORDER BY source"

@@ -1,19 +1,20 @@
 """BLS OEWS/QCEW bulk baselines; market counts and industry staffing shares.
 
-Sources: https://www.bls.gov/oes/tables.htm and https://www.bls.gov/cew/downloadable-data-files.htm
+Sources: https://www.bls.gov/oes/tables.htm and
+https://www.bls.gov/cew/downloadable-data-files.htm
 Public reuse policy: https://www.bls.gov/bls/linksite.htm
 Pass BLS_HOSTS via FetchClient.allowed_hosts; no separate network boundary.
 Whole files are fetched before any state filter. Geography, NAICS, aggregation,
 ownership and size codes remain separate to avoid adding overlapping totals.
 These aggregates do not provide employer headcount or geography apportionment;
-they are inputs to KTD16's estimates, not employer workforce estimates themselves.
+they are inputs to workforce estimates, not employer workforce estimates themselves.
 """
 
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
-from nopoach.collect.dol import _count, _filename, _number, _require, _tables
 from nopoach.collect.fetch import FetchClient, FetchedResponse
+from nopoach.collect.tables import count, filename, number, require, tables
 from nopoach.store.provenance import ProvenanceRecord
 
 BLS_HOSTS = {
@@ -54,8 +55,8 @@ def parse_oews(
     Suppressed cells remain None, including top-coded wages marked '#'.
     """
     records = []
-    for table in _tables(response.body, _filename(response)):
-        _require(
+    for table in tables(response.body, filename(response)):
+        require(
             table,
             [
                 "AREA",
@@ -74,7 +75,7 @@ def parse_oews(
         for row in table.rows:
             if state and row["PRIM_STATE"].upper() != state.upper():
                 continue
-            pct = _number(row.get("PCT_TOTAL", ""), table.filename, "PCT_TOTAL")
+            pct = number(row.get("PCT_TOTAL", ""), table.filename, "PCT_TOTAL")
             industry = row["NAICS"] not in {"000000", "00000", "0000", "0"}
             share = pct / 100 if pct is not None and industry else None
             records.append(
@@ -87,9 +88,9 @@ def parse_oews(
                     row["I_GROUP"],
                     row["OCC_CODE"],
                     row["O_GROUP"],
-                    _count(row["TOT_EMP"], table.filename, "TOT_EMP"),
-                    _number(row["EMP_PRSE"], table.filename, "EMP_PRSE"),
-                    _number(row["A_MEAN"], table.filename, "A_MEAN"),
+                    count(row["TOT_EMP"], table.filename, "TOT_EMP"),
+                    number(row["EMP_PRSE"], table.filename, "EMP_PRSE"),
+                    number(row["A_MEAN"], table.filename, "A_MEAN"),
                     share,
                     "PCT_TOTAL / 100" if share is not None else None,
                     table.filename,
@@ -149,8 +150,8 @@ def parse_qcew(
 ) -> list[QcewRecord]:
     """Keep annual/quarterly counts in their original area/ownership/industry cells."""
     records = []
-    for table in _tables(response.body, _filename(response)):
-        _require(
+    for table in tables(response.body, filename(response)):
+        require(
             table,
             [
                 "area_fips",
@@ -168,9 +169,9 @@ def parse_qcew(
             or "total_annual_wages" in table.columns
         )
         if annual:
-            _require(table, ["annual_avg_emplvl", "total_annual_wages"])
+            require(table, ["annual_avg_emplvl", "total_annual_wages"])
         else:
-            _require(
+            require(
                 table,
                 [
                     "month1_emplvl",
@@ -183,13 +184,13 @@ def parse_qcew(
             if state_fips and not row["area_fips"].startswith(state_fips):
                 continue
             disclosed = row["disclosure_code"] != "N"
-            year = _count(row["year"], table.filename, "year")
+            year = count(row["year"], table.filename, "year")
             if year is None:
                 raise ValueError(f"{table.filename}: missing value in column year")
             monthly: tuple[int | None, int | None, int | None] | None = None
             if not annual:
                 months = [
-                    _count(row[column], table.filename, column) if disclosed else None
+                    count(row[column], table.filename, column) if disclosed else None
                     for column in ("month1_emplvl", "month2_emplvl", "month3_emplvl")
                 ]
                 monthly = (months[0], months[1], months[2])
@@ -203,18 +204,16 @@ def parse_qcew(
                     year,
                     row["qtr"],
                     row["disclosure_code"],
-                    _count(
-                        row["annual_avg_emplvl"], table.filename, "annual_avg_emplvl"
-                    )
+                    count(row["annual_avg_emplvl"], table.filename, "annual_avg_emplvl")
                     if annual and disclosed
                     else None,
-                    _number(
+                    number(
                         row["total_annual_wages"], table.filename, "total_annual_wages"
                     )
                     if annual and disclosed
                     else None,
                     monthly,
-                    _number(
+                    number(
                         row["total_qtrly_wages"], table.filename, "total_qtrly_wages"
                     )
                     if not annual and disclosed

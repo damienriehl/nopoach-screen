@@ -1,9 +1,9 @@
 """Transparent fixed-weight ranking of all selected employer pairs (KTD8).
 
 Flow carries .50, clauses .30, ties .20, without missing-signal redistribution.
-U7's reliable, flagged score already lies in [0, 1]; an unflagged/unreliable
-flow contributes zero. Any U8 filed restriction scores 1, regardless of binding
-or clause count. U9's nonnegative raw tie score is normalized as x/(x+4), with
+The reliable, flagged flow score already lies in [0, 1]; an unflagged/unreliable
+flow contributes zero. Any filed restriction scores 1, regardless of binding
+or clause count. The nonnegative raw tie score is normalized as x/(x+4), with
 4 the weight of a current shared director. Evidence counts do not masquerade
 as probabilities. These fixed conventions need lawful real-data backtesting.
 
@@ -26,6 +26,7 @@ from nopoach.rank.explanations import (
     ExplanationCheck,
     check_explanations,
 )
+from nopoach.rank.pairs import pair_key
 from nopoach.signals.clauses import ClauseSignal
 from nopoach.signals.flow import FlowScreen, PairFlow
 from nopoach.signals.ties import PairTies
@@ -80,10 +81,6 @@ class RankedScreen:
     explanation_method: str = wording.EXPLANATION_METHOD
 
 
-def _pair_key(a: str, b: str) -> tuple[str, str]:
-    return (a, b) if a < b else (b, a)
-
-
 def _order(pair: RankedPair) -> tuple[bool, float, str, str]:
     return (
         len(pair.fired_signals) < 2,
@@ -101,7 +98,7 @@ def rank_pairs(
     ties: Sequence[PairTies] = (),
     explanation_data: Mapping[str, EmployerExplanationData] | None = None,
 ) -> RankedScreen:
-    """Combine U7/U8/U9 outputs; callers supply U2-selected resolved employers.
+    """Combine flow, clause and tie outputs for selected resolved employers.
 
     Supply at most one result per signal/pair, from the same market and period.
     All combinations of selected employers appear exactly once, including
@@ -109,12 +106,12 @@ def rank_pairs(
     reasons for dossiers; absent inputs do not assert complete collection.
     """
     flows = (
-        {_pair_key(p.employer_a_id, p.employer_b_id): p for p in flow.pairs}
+        {pair_key(p.employer_a_id, p.employer_b_id): p for p in flow.pairs}
         if flow is not None
         else {}
     )
-    filed = {_pair_key(p.employer_a_id, p.employer_b_id): p for p in clauses}
-    linked = {_pair_key(p.employer_a_id, p.employer_b_id): p for p in ties}
+    filed = {pair_key(p.employer_a_id, p.employer_b_id): p for p in clauses}
+    linked = {pair_key(p.employer_a_id, p.employer_b_id): p for p in ties}
     data = explanation_data or {}
     mutual: list[RankedPair] = []
     one_way: list[RankedPair] = []
