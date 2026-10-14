@@ -8,15 +8,20 @@ Workers are annual observations with U3-resolved IDs/SOC and caller-crosswalked
 geographies; LCA positions are never added to the visible-worker numerator.
 """
 
+import json
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from math import isfinite
+from typing import Literal
+from uuid import uuid4
 
 from nopoach.collect.bls import OewsRecord
-from nopoach.collect.dol import DolRecord
+from nopoach.collect.dol import DolRecord, load_dol_records
 from nopoach.market.define import Employer, Geography, Market, soc_code
+from nopoach.store.workspace import Workspace
 
 COMPANY_ALLOCATION_UNCERTAINTY = 0.5
 
@@ -234,8 +239,11 @@ class CoverageReport:
 def coverage_report(
     market: Market,
     employers: Iterable[Employer],
-    estimates: Iterable[WorkforceEstimate],
-    workers: Iterable[MarketWorker],
+    estimates: Iterable[WorkforceEstimate] | None = None,
+    workers: Iterable[MarketWorker] = (),
+    *,
+    workspace: Workspace | None = None,
+    as_of: date | None = None,
 ) -> CoverageReport:
     """Count distinct visible persons per employer/year and weight the total.
 
@@ -252,6 +260,10 @@ def coverage_report(
         ),
         key=lambda e: e.id,
     )
+    if estimates is None:
+        estimates = (
+            workspace_estimates(workspace, market, as_of=as_of) if workspace else ()
+        )
     known = matching_estimates(market, estimates)
     visible: dict[tuple[str, int], set[str]] = defaultdict(set)
     for worker in workers:
@@ -290,3 +302,140 @@ def coverage_report(
             )
         )
     return CoverageReport(market, tuple(annual), tuple(overall))
+
+
+WorkforceInputKind = Literal[
+    "imported", "lawyer", "company", "staffing_share", "geography_share"
+]
+
+
+def store_workforce_input(
+    workspace: Workspace,
+    employer_id: str,
+    year: int,
+    market: Market,
+    *,
+    kind: WorkforceInputKind,
+    headcount: Headcount,
+    as_of: date,
+    provenance_id: str,
+) -> str:
+    """Persist a dated KTD16 input; shares cover the declared market's SOC set.
+
+    Company counts are firm-wide. Staffing shares are BLS-derived fractions;
+    geography shares are explicit allocations, never inferred from visible jobs.
+    Latest dated input of each kind wins, with ID settling same-date entries.
+    """
+    if kind in {"staffing_share", "geography_share"} and (
+        headcount.upper is None or headcount.upper > 1
+    ):
+        raise ValueError("Workforce shares require bounded fractions")
+    identifier = str(uuid4())
+    workspace.connection.execute(
+        "INSERT INTO workforce_inputs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            identifier,
+            employer_id,
+            year,
+            json.dumps(sorted(market.occupation_codes)),
+            market.geography.kind,
+            market.geography.code,
+            kind,
+            headcount.value,
+            headcount.lower,
+            headcount.upper,
+            headcount.source,
+            as_of,
+            provenance_id,
+        ],
+    )
+    return identifier
+
+
+def workspace_estimates(
+    workspace: Workspace, market: Market, *, as_of: date | None = None
+) -> tuple[WorkforceEstimate, ...]:
+    """Apply KTD16 to the latest persisted inputs and period-dated LCA records."""
+    inputs: dict[tuple[str, int], dict[str, Headcount]] = defaultdict(dict)
+    for row in workspace.connection.execute(
+        "SELECT employer_id, year, occupation_codes_json, geography_kind, "
+        "geography_code, kind, value, lower_bound, upper_bound, source, "
+        "as_of, provenance_id FROM workforce_inputs ORDER BY as_of, id"
+    ).fetchall():
+        if (
+            frozenset(json.loads(row[2])) == market.occupation_codes
+            and Geography(row[3], row[4]) == market.geography
+            and market.start_year <= row[1] <= market.end_year
+            and (as_of is None or row[10] <= as_of)
+        ):
+            inputs[row[0], row[1]][row[5]] = Headcount(
+                row[6], row[7], row[8], f"{row[9]} [{row[11]}]"
+            )
+    lca = load_dol_records(workspace)
+    result = []
+    for (employer_id,) in workspace.connection.execute(
+        "SELECT id FROM employers ORDER BY id"
+    ).fetchall():
+        for year in range(market.start_year, market.end_year + 1):
+            values = inputs[employer_id, year]
+            imported, lawyer = values.get("imported"), values.get("lawyer")
+            company, staffing, geography = (
+                values.get("company"),
+                values.get("staffing_share"),
+                values.get("geography_share"),
+            )
+            if (
+                imported is None
+                and lawyer is None
+                and company
+                and staffing
+                and geography
+            ):
+                allocation = staffing.value * geography.value
+                imported = Headcount(
+                    company.value * allocation,
+                    company.lower * allocation * (1 - COMPANY_ALLOCATION_UNCERTAINTY),
+                    None
+                    if company.upper is None
+                    else company.upper
+                    * allocation
+                    * (1 + COMPANY_ALLOCATION_UNCERTAINTY),
+                    f"{company.source}; BLS staffing: {staffing.source}; "
+                    f"geography: {geography.source}",
+                    "Company-count bounds plus +/-50% allocation sensitivity; "
+                    "not a confidence interval",
+                )
+            records = [
+                r
+                for r in lca
+                if dol_in_period(r, date(year, 1, 1), date(year, 12, 31), as_of=as_of)
+            ]
+            result.append(
+                estimate_workforce(
+                    employer_id,
+                    year,
+                    market,
+                    imported=imported,
+                    lawyer=lawyer,
+                    lca=records,
+                )
+            )
+    return tuple(result)
+
+
+def dol_in_period(
+    record: DolRecord, start: date, end: date, *, as_of: date | None = None
+) -> bool:
+    """Unknown-dated bulk records cannot establish period-specific footprints/pay."""
+    dates = (
+        record.decision_date,
+        record.employment_begin_date,
+        record.employment_end_date,
+    )
+    if as_of is not None and any(d is not None and d > as_of for d in dates):
+        return False
+    if record.employment_begin_date is not None:
+        return record.employment_begin_date <= end and (
+            record.employment_end_date is None or record.employment_end_date >= start
+        )
+    return record.decision_date is not None and start <= record.decision_date <= end

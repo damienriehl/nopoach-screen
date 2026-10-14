@@ -237,3 +237,29 @@ def test_screening_scenarios_have_unaffected_comparison_employers(name):
     controls = [e for e in scenario.employers if e.key not in affected]
     assert len(controls) >= 4
     assert all(e.size == 1000 and e.occupation_shares == (1.0,) for e in controls)
+
+
+def test_synthetic_geography_and_true_annual_denominators_persist(tmp_path):
+    base = named_scenario("AE3")
+    scenario = replace(
+        base,
+        employers=tuple(replace(e, size=20) for e in base.employers),
+        start_year=2019,
+        end_year=2021,
+        coverage=(CoverageMask("processor-a", 0),),
+    )
+    generated = generate_market(scenario, seed=42)
+    with Workspace.open(tmp_path / "data") as workspace:
+        import_market(workspace, generated)
+        assert workspace.connection.execute(
+            "SELECT DISTINCT cbsa, latitude, longitude FROM position_worksites"
+        ).fetchall() == [("SYNTHETIC", 0.0, 0.0)]
+        stored = workspace.connection.execute(
+            "SELECT year, sum(value), min(source), min(as_of) "
+            "FROM workforce_inputs GROUP BY year ORDER BY year"
+        ).fetchall()
+        from datetime import date
+
+        assert stored == [
+            (y, 40.0, "synthetic", date(y, 1, 1)) for y in range(2019, 2022)
+        ]

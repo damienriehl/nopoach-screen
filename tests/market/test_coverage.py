@@ -177,3 +177,57 @@ def test_unknown_denominator_is_visible_and_does_not_create_false_overall_covera
 def test_invalid_public_estimates_cannot_manufacture_reliability(value, low, high):
     with pytest.raises(ValueError):
         Headcount(value, low, high, "synthetic invalid")
+
+
+def test_workspace_ktd16_inputs_used_when_estimates_omitted(tmp_path):
+    from datetime import date
+
+    from nopoach.market.coverage import store_workforce_input
+
+    market = Market(frozenset({"15-1252"}), Geography("metro", "99999"), 2024, 2024)
+    with Workspace.open(tmp_path / "data") as workspace:
+        receipt = workspace.provenance.append(
+            source="synthetic", url="file:counts", method="IMPORT", body=b"counts"
+        )
+        employer = (
+            EmployerResolver(workspace)
+            .resolve("Synthetic Company", provenance_id=receipt.id)
+            .entity_id
+        )
+        for kind, value in (
+            ("company", 10000),
+            ("staffing_share", 0.2),
+            ("geography_share", 0.25),
+        ):
+            store_workforce_input(
+                workspace,
+                employer,
+                2024,
+                market,
+                kind=kind,
+                headcount=Headcount(value, value, value, "synthetic"),
+                as_of=date(2024, 1, 1),
+                provenance_id=receipt.id,
+            )
+        employers = [Employer(employer, "Synthetic Company")]
+        report = coverage_report(market, employers, workers=(), workspace=workspace)
+        assert report.employers[0].estimate.headcount.value == 500
+        assert report.employers[0].estimate.headcount.lower == 250
+        assert report.employers[0].estimate.headcount.upper == 750
+        store_workforce_input(
+            workspace,
+            employer,
+            2024,
+            market,
+            kind="lawyer",
+            headcount=Headcount(300, 250, 350, "entered"),
+            as_of=date(2024, 2, 1),
+            provenance_id=receipt.id,
+        )
+        report = coverage_report(market, employers, workers=(), workspace=workspace)
+        assert report.employers[0].estimate.headcount.value == 300
+
+        past = coverage_report(
+            market, employers, workers=(), workspace=workspace, as_of=date(2024, 1, 1)
+        )
+        assert past.employers[0].estimate.headcount.value == 500

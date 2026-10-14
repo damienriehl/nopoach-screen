@@ -149,3 +149,37 @@ def test_synthetic_records_retain_synthetic_class_and_collection_method(tmp_path
             "JOIN provenance p ON p.id = r.provenance_id"
         ).fetchone() == ("synthetic", "synthetic", "synthetic")
         assert workspace.provenance.records()[0].collection_method == "synthetic"
+
+
+def test_optional_cbsa_centroid_persisted_from_csv_and_programmatic_rows(tmp_path):
+    path = tmp_path / "geo.csv"
+    path.write_text(
+        "person_key,employer_name,title,location,start_date,start_precision,"
+        "end_date,end_precision,cbsa,latitude,longitude\n"
+        "geo-1,Synthetic Works,Software Developer,Fixture,2010,year,,unknown,"
+        "99999,44.9,-93.2\n"
+    )
+    with Workspace.open(tmp_path / "data") as workspace:
+        first = import_file(workspace, path, source="fixture", provenance_class=CLASS)
+        second = import_records(
+            workspace,
+            [
+                row(
+                    person_key="geo-2", cbsa="99999", latitude="44.9", longitude="-93.2"
+                ),
+                row(person_key="unknown"),
+            ],
+            source="fixture",
+            provenance_class=CLASS,
+        )
+        assert first.accepted_count == 1 and second.accepted_count == 2
+        sites = workspace.connection.execute(
+            "SELECT cbsa, latitude, longitude, source, method, provenance_id "
+            "FROM position_worksites ORDER BY position_id"
+        ).fetchall()
+        assert len(sites) == 2
+        assert all(
+            r[:5] == ("99999", 44.9, -93.2, "fixture", "supplied_cbsa_centroid")
+            for r in sites
+        )
+        assert {r[5] for r in sites} == {first.provenance_id, second.provenance_id}

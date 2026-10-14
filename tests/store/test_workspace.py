@@ -20,6 +20,9 @@ def test_create_and_reopen_workspace(tmp_path):
             row[0] for row in workspace.connection.execute("SHOW TABLES").fetchall()
         }
         assert tables == {
+            "position_worksites",
+            "workforce_inputs",
+            "dol_records",
             "employers",
             "employer_parents",
             "people",

@@ -14,6 +14,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from math import isfinite
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -29,6 +30,9 @@ from nopoach.imports.schema import (
 from nopoach.resolve.employers import EmployerResolver, normalize_name
 from nopoach.resolve.people import PersonResolver
 from nopoach.store.workspace import Workspace
+
+# Optional geography columns extend the loader without changing U3 templates.
+_GEO_COLUMNS = ("cbsa", "latitude", "longitude")
 
 
 @dataclass(frozen=True)
@@ -57,13 +61,13 @@ def column_mapping(
 ) -> dict[str, str]:
     """Resolve documented vendor aliases, with canonical -> vendor overrides."""
     overrides = overrides or {}
-    unknown = set(overrides) - set(COLUMNS)
+    unknown = set(overrides) - set(COLUMNS + _GEO_COLUMNS)
     if unknown:
         raise ValueError(f"Unknown canonical columns: {', '.join(sorted(unknown))}")
     if len(set(columns)) != len(columns):
         raise ValueError("Duplicate input column names")
     mapping = {}
-    for column in COLUMNS:
+    for column in COLUMNS + _GEO_COLUMNS:
         if column in overrides:
             candidates = [overrides[column]] if overrides[column] in columns else []
         elif column in columns:
@@ -129,7 +133,9 @@ def _validated(row: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
     if "__extra_columns__" in row:
         raise ValueError("CSV row field count does not match its header")
-    data: dict[str, Any] = {column: _text(row.get(column)) for column in COLUMNS}
+    data: dict[str, Any] = {
+        column: _text(row.get(column)) for column in COLUMNS + _GEO_COLUMNS
+    }
     for column in ("person_key", "employer_name", "title", "location"):
         if not data[column]:
             raise ValueError(f"{column} is required")
@@ -154,6 +160,17 @@ def _validated(row: Mapping[str, Any]) -> dict[str, Any]:
             if re.search(r"\b" + re.escape(keyword) + r"\b", title):
                 data["occupation_code"] = soc
                 break
+    for column, bound in (("latitude", 90), ("longitude", 180)):
+        value = data[column]
+        data[column] = float(value) if value else None
+        if data[column] is not None and (
+            not isfinite(data[column]) or abs(data[column]) > bound
+        ):
+            raise ValueError(f"{column}: invalid centroid coordinate")
+    if (data["latitude"] is None) != (data["longitude"] is None):
+        raise ValueError("Supply both centroid coordinates")
+    if data["latitude"] is not None and not data["cbsa"]:
+        raise ValueError("Centroid coordinates require a CBSA code")
     return data
 
 
@@ -329,6 +346,19 @@ def _import(
                     receipt.id,
                 ],
             )
+            if data["cbsa"]:
+                connection.execute(
+                    "INSERT INTO position_worksites VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        position_id,
+                        data["cbsa"].upper(),
+                        data["latitude"],
+                        data["longitude"],
+                        source,
+                        "supplied_cbsa_centroid",
+                        receipt.id,
+                    ],
+                )
             connection.execute(
                 "INSERT INTO imported_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [

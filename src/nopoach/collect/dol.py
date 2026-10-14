@@ -10,10 +10,13 @@ are not metro codes. An unmapped worksite retains a None metro.
 
 import csv
 import io
+import json
 import posixpath
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from typing import Literal
 from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
@@ -22,10 +25,19 @@ from zipfile import ZipFile, is_zipfile
 from nopoach.collect.fetch import FetchClient, FetchedResponse
 from nopoach.resolve.employers import EmployerResolver
 from nopoach.store.provenance import ProvenanceRecord
+from nopoach.store.workspace import Workspace
 
 DOL_HOSTS = {"www.dol.gov": 1.0, "dol.gov": 1.0}
 MetroLookup = Callable[[str, str, str], str | None]
 _XML_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_EVENT_COLUMNS = {
+    "DECISION_DATE",
+    "CASE_DECISION_DATE",
+    "EMPLOYMENT_BEGIN_DATE",
+    "EMPLOYMENT_END_DATE",
+    "BEGIN_DATE",
+    "END_DATE",
+}
 
 
 class SourceSchemaError(ValueError):
@@ -58,6 +70,12 @@ def _table(filename: str, rows: Sequence[Sequence[str]]) -> _Table:
 
 
 def _xlsx_tables(archive: ZipFile, filename: str) -> Iterator[_Table]:
+    epoch = date(1899, 12, 30)
+    if "xl/workbook.xml" in archive.namelist():
+        workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+        properties = workbook.find(f"{_XML_NS}workbookPr")
+        if properties is not None and properties.get("date1904") in {"1", "true"}:
+            epoch = date(1904, 1, 1)
     strings: list[str] = []
     if "xl/sharedStrings.xml" in archive.namelist():
         root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
@@ -82,6 +100,15 @@ def _xlsx_tables(archive: ZipFile, filename: str) -> Iterator[_Table]:
                     value = "".join(
                         node.text or "" for node in cell.iter(f"{_XML_NS}t")
                     )
+                elif (
+                    value
+                    and rows
+                    and index <= len(rows[0])
+                    and rows[0][index - 1] in _EVENT_COLUMNS
+                    and cell.get("t") in {None, "n"}
+                ):
+                    # XLSX stores actual date cells as days in its workbook epoch.
+                    value = (epoch + timedelta(days=float(value))).isoformat()
                 cells[index - 1] = value
             if cells:
                 rows.append([cells.get(index, "") for index in range(max(cells) + 1)])
@@ -167,6 +194,9 @@ class DolRecord:
     worker_positions: int | None
     source_file: str
     provenance: ProvenanceRecord
+    decision_date: date | None = None
+    employment_begin_date: date | None = None
+    employment_end_date: date | None = None
 
 
 def _annual_wage(wage: Decimal | None, unit: str) -> Decimal | None:
@@ -256,8 +286,37 @@ def parse_dol(
                     workers,
                     table.filename,
                     response.provenance,
+                    _event_date(
+                        row.get("DECISION_DATE") or row.get("CASE_DECISION_DATE", "")
+                    ),
+                    _event_date(
+                        row.get("EMPLOYMENT_BEGIN_DATE") or row.get("BEGIN_DATE", "")
+                    ),
+                    _event_date(
+                        row.get("EMPLOYMENT_END_DATE") or row.get("END_DATE", "")
+                    ),
                 )
             )
+    for record in records:
+        encoded = json.dumps({"version": 1, "record": asdict(record)}, default=str)
+        identifier = sha256(
+            f"{record.provenance.id}:{record.source_file}:{encoded}".encode()
+        ).hexdigest()
+        resolver.connection.execute(
+            "INSERT INTO dol_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
+            [
+                identifier,
+                record.employer_id,
+                record.program,
+                record.case_number,
+                record.decision_date,
+                record.employment_begin_date,
+                record.employment_end_date,
+                encoded,
+                record.provenance.id,
+            ],
+        )
     return records
 
 
@@ -278,3 +337,35 @@ def collect_dol(
         state=state,
         metro_lookup=metro_lookup,
     )
+
+
+def _event_date(value: str) -> date | None:
+    if not value:
+        return None
+    for pattern in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(value, pattern).date()
+        except ValueError:
+            pass
+    raise ValueError(f"Invalid DOL event date: {value!r}")
+
+
+def load_dol_records(workspace: Workspace) -> tuple[DolRecord, ...]:
+    """Read retained parsed bulk records with event dates and original receipts."""
+    result = []
+    for (encoded,) in workspace.connection.execute(
+        "SELECT details_json FROM dol_records ORDER BY id"
+    ).fetchall():
+        payload = json.loads(encoded)
+        if payload["version"] != 1:
+            raise ValueError("Unsupported DOL evidence version")
+        data = payload["record"]
+        for key in ("wage_from", "wage_to", "annual_wage_from", "annual_wage_to"):
+            data[key] = Decimal(data[key]) if data[key] is not None else None
+        for key in ("decision_date", "employment_begin_date", "employment_end_date"):
+            data[key] = date.fromisoformat(data[key]) if data[key] else None
+        receipt = data["provenance"]
+        receipt["collected_at"] = datetime.fromisoformat(receipt["collected_at"])
+        data["provenance"] = ProvenanceRecord(**receipt)
+        result.append(DolRecord(**data))
+    return tuple(result)

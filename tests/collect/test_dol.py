@@ -266,3 +266,89 @@ def test_live_dol_state_files_record_provenance(tmp_path):
                     for row in rows
                 )
         print(workspace.provenance.path.read_text())
+
+
+@pytest.mark.parametrize("program", ["LCA", "PERM"])
+def test_dol_dates_and_parsed_records_persist(tmp_path, program):
+    from datetime import date
+
+    from nopoach.collect.dol import load_dol_records
+
+    columns = LCA_COLUMNS + [
+        "DECISION_DATE",
+        "EMPLOYMENT_BEGIN_DATE",
+        "EMPLOYMENT_END_DATE",
+    ]
+    rows = [LCA_ROWS[0] + ["01/15/2020", "2020-02-01", "2022-01-31"]]
+    if program == "PERM":
+        columns = [
+            c.replace("WAGE_RATE_OF_PAY", "WAGE_OFFER").replace(
+                "WAGE_UNIT_OF_PAY", "WAGE_OFFER_UNIT_OF_PAY"
+            )
+            for c in columns
+        ]
+    with Workspace.open(tmp_path / "data") as workspace:
+        with FetchClient(
+            workspace.provenance,
+            contact="test@example.invalid",
+            allowed_hosts=DOL_HOSTS,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=csv_bytes(columns, rows))
+            ),
+        ) as client:
+            parsed = collect_dol(
+                client,
+                "https://www.dol.gov/synthetic.csv",
+                EmployerResolver(workspace),
+                program=program,
+            )
+        assert parsed[0].decision_date == date(2020, 1, 15)
+        assert parsed[0].employment_begin_date == date(2020, 2, 1)
+        assert parsed[0].employment_end_date == date(2022, 1, 31)
+        assert load_dol_records(workspace) == tuple(parsed)
+
+
+@pytest.mark.parametrize("epoch_flag,serial", [("0", "43845"), ("1", "42383")])
+def test_xlsx_numeric_decision_date_persists_with_workbook_epoch(
+    tmp_path, epoch_flag, serial
+):
+    from datetime import date
+    from xml.etree import ElementTree
+
+    from nopoach.collect.dol import load_dol_records
+
+    original = xlsx_bytes(LCA_COLUMNS + ["DECISION_DATE"], [LCA_ROWS[0] + ["date"]])
+    stream = io.BytesIO()
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with ZipFile(io.BytesIO(original)) as source, ZipFile(stream, "w") as output:
+        for name in source.namelist():
+            body = source.read(name)
+            if name == "xl/worksheets/sheet1.xml":
+                root = ElementTree.fromstring(body)
+                cell = next(c for c in root.iter(f"{namespace}c") if c.get("r") == "K2")
+                cell.attrib.pop("t")
+                cell.find(f"{namespace}v").text = serial
+                body = ElementTree.tostring(root)
+            output.writestr(name, body)
+        output.writestr(
+            "xl/workbook.xml",
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            f'<workbookPr date1904="{epoch_flag}"/></workbook>',
+        )
+    with Workspace.open(tmp_path / "data") as workspace:
+        with FetchClient(
+            workspace.provenance,
+            contact="test@example.invalid",
+            allowed_hosts=DOL_HOSTS,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=stream.getvalue())
+            ),
+        ) as client:
+            records = collect_dol(
+                client,
+                "https://www.dol.gov/synthetic-lca.xlsx",
+                EmployerResolver(workspace),
+                program="LCA",
+            )
+        assert records[0].decision_date == date(2020, 1, 15)
+        assert load_dol_records(workspace)[0].decision_date == date(2020, 1, 15)

@@ -8,15 +8,30 @@ No network or real data is used.
 
 import json
 from dataclasses import asdict, dataclass
-from math import dist, exp
+from datetime import date
+from math import dist, exp, pi
+from typing import TypedDict
 from uuid import uuid4
 
 import numpy as np
 
 from nopoach.imports.loader import ImportResult, import_records
 from nopoach.imports.schema import ProvenanceClass
+from nopoach.market.coverage import Headcount, store_workforce_input
+from nopoach.market.define import Geography, Market
+from nopoach.resolve.employers import EmployerResolver
 from nopoach.store.workspace import Workspace
 from nopoach.synth.scenarios import Scenario
+
+
+class _SyntheticCount(TypedDict):
+    employer_key: str
+    employer_name: str
+    year: int
+    occupation_codes: list[str]
+    value: int
+    as_of: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -130,6 +145,10 @@ def generate_market(scenario: Scenario, *, seed: int) -> GeneratedMarket:
                 f"Synthetic coordinates {employer.location[0]}, "
                 f"{employer.location[1]} km"
             ),
+            "cbsa": "SYNTHETIC",
+            # Invented centroids: map fixture kilometres at the equator to degrees.
+            "latitude": str(employer.location[1] / (6371 * pi / 180)),
+            "longitude": str(employer.location[0] / (6371 * pi / 180)),
             "start_date": f"{int(started[worker]):04d}-01-01",
             "end_date": "" if end_year is None else f"{end_year:04d}-12-31",
             "start_precision": "day",
@@ -193,7 +212,74 @@ def import_market(workspace: Workspace, market: GeneratedMarket) -> ImportResult
         provenance_class=ProvenanceClass.SYNTHETIC,
         person_key_namespace=source,
     )
+    scenario = market.scenario
+    resolved = dict(
+        workspace.connection.execute(
+            "SELECT external_id, employer_id FROM employer_aliases "
+            "WHERE external_id_type = ?",
+            [source.casefold()],
+        ).fetchall()
+    )
+    visible_employers = set(resolved)
+    codes = frozenset(o.code for o in scenario.occupations)
+    selections = {codes} | {frozenset({code}) for code in codes}
+    counts: list[_SyntheticCount] = [
+        {
+            "employer_key": employer.key,
+            "employer_name": employer.name,
+            "year": year,
+            "occupation_codes": sorted(selection),
+            "value": sum(
+                r["employer_id"] == employer.key
+                and r["occupation_code"] in selection
+                and r["start_date"] <= f"{year:04d}-01-01"
+                and (not r["end_date"] or r["end_date"] >= f"{year:04d}-01-01")
+                for r in market.true_rows
+            ),
+            "as_of": f"{year:04d}-01-01",
+            "source": "synthetic",
+        }
+        for employer in scenario.employers
+        for year in range(scenario.start_year, scenario.end_year + 1)
+        for selection in sorted(selections, key=lambda value: tuple(sorted(value)))
+    ]
+    count_receipt = workspace.provenance.append(
+        source=source,
+        url="file:synthetic-denominators",
+        method="IMPORT",
+        body=json.dumps(counts, sort_keys=True).encode(),
+        collection_method="synthetic",
+    )
+    resolver = EmployerResolver(workspace)
+    for spec in scenario.employers:
+        if spec.key not in resolved:
+            resolved[spec.key] = resolver.resolve(
+                spec.name,
+                provenance_id=count_receipt.id,
+                employer_id=spec.key,
+                employer_id_type=source,
+            ).entity_id
+    for count in counts:
+        definition = Market(
+            frozenset(count["occupation_codes"]),
+            Geography("metro", "SYNTHETIC"),
+            scenario.start_year,
+            scenario.end_year,
+        )
+        value = count["value"]
+        store_workforce_input(
+            workspace,
+            resolved[count["employer_key"]],
+            count["year"],
+            definition,
+            kind="imported",
+            headcount=Headcount(value, value, value, "synthetic"),
+            as_of=date.fromisoformat(count["as_of"]),
+            provenance_id=count_receipt.id,
+        )
     for clause in market.scenario.clauses:
+        if clause.employer_a not in visible_employers:
+            continue
         employer = workspace.connection.execute(
             "SELECT employer_id FROM employer_aliases "
             "WHERE external_id = ? AND external_id_type = ? LIMIT 1",

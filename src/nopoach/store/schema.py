@@ -51,6 +51,46 @@ CREATE TABLE IF NOT EXISTS positions (
     provenance_id VARCHAR NOT NULL REFERENCES provenance(id),
     CHECK (end_date IS NULL OR start_date IS NULL OR end_date >= start_date)
 );
+CREATE TABLE IF NOT EXISTS position_worksites (
+    position_id VARCHAR PRIMARY KEY REFERENCES positions(id),
+    cbsa VARCHAR NOT NULL,
+    latitude DOUBLE,
+    longitude DOUBLE,
+    source VARCHAR NOT NULL,
+    method VARCHAR NOT NULL,
+    provenance_id VARCHAR NOT NULL REFERENCES provenance(id),
+    CHECK ((latitude IS NULL AND longitude IS NULL) OR
+           (latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180))
+);
+CREATE TABLE IF NOT EXISTS workforce_inputs (
+    id VARCHAR PRIMARY KEY,
+    employer_id VARCHAR NOT NULL REFERENCES employers(id),
+    year INTEGER NOT NULL,
+    occupation_codes_json JSON NOT NULL,
+    geography_kind VARCHAR NOT NULL,
+    geography_code VARCHAR NOT NULL,
+    kind VARCHAR NOT NULL CHECK (kind IN
+        ('imported', 'lawyer', 'company', 'staffing_share', 'geography_share')),
+    value DOUBLE NOT NULL,
+    lower_bound DOUBLE NOT NULL,
+    upper_bound DOUBLE,
+    source VARCHAR NOT NULL,
+    as_of DATE NOT NULL,
+    provenance_id VARCHAR NOT NULL REFERENCES provenance(id),
+    CHECK (lower_bound >= 0 AND lower_bound <= value AND
+           (upper_bound IS NULL OR upper_bound >= value))
+);
+CREATE TABLE IF NOT EXISTS dol_records (
+    id VARCHAR PRIMARY KEY,
+    employer_id VARCHAR NOT NULL REFERENCES employers(id),
+    program VARCHAR NOT NULL CHECK (program IN ('LCA', 'PERM')),
+    case_number VARCHAR NOT NULL,
+    decision_date DATE,
+    employment_begin_date DATE,
+    employment_end_date DATE,
+    details_json JSON NOT NULL,
+    provenance_id VARCHAR NOT NULL REFERENCES provenance(id)
+);
 CREATE TABLE IF NOT EXISTS filings (
     id VARCHAR PRIMARY KEY,
     employer_id VARCHAR NOT NULL REFERENCES employers(id),
