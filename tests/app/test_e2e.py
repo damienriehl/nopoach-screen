@@ -11,7 +11,7 @@ import socket
 import time
 from pathlib import Path
 from threading import Thread
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import pytest
 import uvicorn
@@ -80,7 +80,7 @@ def accessibility(page):
 def test_refusal_page_accessibility(browser):
     page, _, _ = browser
     page.context.clear_cookies()
-    response = page.goto("/")
+    response = page.goto(urljoin(page.url, "/"))
     assert response.status == 403
     expect(page).to_have_title("Request refused · Labor market screen")
     expect(page.get_by_role("heading", name="Request refused")).to_be_visible()
@@ -102,6 +102,7 @@ def define_and_run(page, root, occupation="29-1141"):
     accessibility(page)
     page.get_by_label("Occupation codes (SOC)").fill(occupation)
     page.get_by_label("State or metro code").fill("SYNTHETIC")
+    page.get_by_label("First year").fill("2015")
     page.get_by_label("Last year").fill("2024")
     page.get_by_role("button", name="Propose competitors").click()
     page.get_by_role("button", name="Run screen", exact=True).click()
@@ -115,6 +116,40 @@ def define_and_run(page, root, occupation="29-1141"):
     accessibility(page)
 
 
+def coverage_layout(page):
+    region = page.get_by_role(
+        "region", name="Workforce coverage by employer and year", exact=True
+    )
+    expect(region).to_have_attribute("tabindex", "0")
+    region.focus()
+    expect(region).to_be_focused()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    assert region.evaluate(
+        """element => {
+            const panel = element.closest('aside').getBoundingClientRect();
+            const bounds = element.getBoundingClientRect();
+            return bounds.left >= panel.left && bounds.right <= panel.right + 1;
+        }"""
+    )
+    if region.evaluate("element => element.scrollWidth > element.clientWidth"):
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function(
+            """() => document.querySelector(
+                '[aria-label="Workforce coverage by employer and year"]'
+            ).scrollLeft > 0"""
+        )
+        region.evaluate("element => { element.scrollLeft = element.scrollWidth; }")
+    assert region.evaluate(
+        """element => {
+            const header = element.querySelector('thead th:last-child')
+                .getBoundingClientRect();
+            const bounds = element.getBoundingClientRect();
+            return header.left >= bounds.left && header.right <= bounds.right + 1;
+        }"""
+    )
+    region.evaluate("element => { element.scrollLeft = 0; }")
+
+
 def test_planted_pair_dossier_import_and_partial_export(browser):
     page, app, artifacts = browser
     root = artifacts / "synthetic-ae1"
@@ -123,7 +158,13 @@ def test_planted_pair_dossier_import_and_partial_export(browser):
     define_and_run(page, root)
     first = page.locator("table").first.locator("tbody tr").first
     expect(first).to_contain_text("Synthetic Amber Hospital / Synthetic Birch Hospital")
+    coverage_layout(page)
+    page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(path=str(artifacts / "ranked-list.png"), full_page=False)
+    page.set_viewport_size({"width": 360, "height": 800})
+    coverage_layout(page)
+    accessibility(page)
+    page.set_viewport_size({"width": 1440, "height": 1000})
     page.get_by_role("link", name="Accept partial screen", exact=True).click()
     accessibility(page)
     expect(
@@ -139,24 +180,32 @@ def test_planted_pair_dossier_import_and_partial_export(browser):
     page.get_by_role(
         "link", name="Synthetic Amber Hospital / Synthetic Birch Hospital", exact=True
     ).click()
+    page.wait_for_load_state("domcontentloaded")
     accessibility(page)
     page.screenshot(path=str(artifacts / "dossier.png"), full_page=False)
-    page.get_by_text("Show the data", exact=True).first.click()
-    page.locator("a[hx-get*='/moves?']").first.click()
+    flow_data = page.locator("#flow-data-0")
+    flow_data.get_by_text("Show the data", exact=True).click()
+    observed = flow_data.locator("a[hx-get$='/moves?direction=0&year=2015']")
+    moves_url = observed.get_attribute("hx-get")
+    assert moves_url is not None
+    dossier_url = page.url
+    with page.expect_response(urljoin(dossier_url, moves_url)) as response:
+        observed.click()
+    assert response.value.status == 200
+    assert response.value.request.headers.get("hx-request") == "true"
+    assert page.url == dossier_url
+    moves_region = page.locator("#moves-0-2015")
     expect(
-        page.get_by_role("heading", name="Person-level moves in 2015")
+        moves_region.get_by_role("heading", name="Person-level moves in 2015")
     ).to_be_visible()
-    expect(page.get_by_text("Person key", exact=True).first).to_be_visible()
+    expect(moves_region.get_by_text("Person key", exact=True).first).to_be_visible()
     accessibility(page)
-    if page.get_by_role("link", name="Export dossier (Word)").count():
-        with page.expect_download() as download:
-            page.get_by_role("link", name="Export dossier (Word)").click()
-        from docx import Document
+    with page.expect_download() as download:
+        page.get_by_role("link", name="Export dossier (Word)").click()
+    from docx import Document
 
-        document = Document(io.BytesIO(Path(download.value.path()).read_bytes()))
-        assert "Partial screen" in "\n".join(p.text for p in document.paragraphs)
-    else:
-        expect(page.get_by_text("Export unavailable.", exact=False)).to_be_visible()
+    document = Document(io.BytesIO(Path(download.value.path()).read_bytes()))
+    assert "Partial screen" in "\n".join(p.text for p in document.paragraphs)
     page.get_by_role("link", name="Ranked screen", exact=True).click()
     confirmed = app.state.session.market.employer_ids
     page.get_by_role("link", name="Import data to close a coverage gap").click()

@@ -638,7 +638,7 @@ def export(request: Request, a: str, b: str) -> FileResponse | HTMLResponse:
     output.parent.mkdir(exist_ok=True, mode=0o700)
     with Workspace.open(folder) as workspace:
         function(
-            workspace=workspace, screen=session.result, pair=pair, output_path=output
+            workspace=workspace, screen=session.result, pair=pair, destination=output
         )
     return FileResponse(
         output,

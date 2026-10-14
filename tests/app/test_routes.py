@@ -144,7 +144,12 @@ def run_market(client):
 
 
 def test_import_rejects_rerun_partial_and_dossier(client, tmp_path):
-    open_workspace(client, tmp_path)
+    import io
+
+    from docx import Document
+    from lxml import html
+
+    root = open_workspace(client, tmp_path)
     run_market(client)
     response = wait_screen(client)
     assert "Unreliable pairs" in response.text
@@ -167,7 +172,20 @@ def test_import_rejects_rerun_partial_and_dossier(client, tmp_path):
     dossier = client.get(f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}")
     assert "Explanations checked" in dossier.text
     assert "Synthetic source" in dossier.text
-    assert "Export unavailable" in dossier.text
+    export_links = html.fromstring(dossier.text).xpath(
+        "//a[normalize-space(.)='Export dossier (Word)']/@href"
+    )
+    assert export_links == [f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}/export"]
+    exported = client.get(export_links[0])
+    assert exported.status_code == 200
+    assert exported.headers["content-disposition"] == (
+        'attachment; filename="dossier.docx"'
+    )
+    files = list((root / "exports").glob("*.docx"))
+    assert len(files) == 1
+    assert files[0].read_bytes() == exported.content
+    document = Document(io.BytesIO(exported.content))
+    assert "Partial screen" in "\n".join(p.text for p in document.paragraphs)
     assert "Partial screen" in dossier.text
     body = (
         "worker,employer_name,title,location,start_date,start_precision,end_date,end_precision\n"
@@ -194,6 +212,31 @@ def test_import_rejects_rerun_partial_and_dossier(client, tmp_path):
     wait_screen(client)
     assert client.app.state.session.market.employer_ids == confirmed
     assert "Synthetic supplemental" in client.get("/imports").text
+
+
+def test_dossier_export_unavailable_when_public_function_is_absent(client, tmp_path):
+    from types import SimpleNamespace
+
+    from lxml import html
+
+    root = open_workspace(client, tmp_path)
+    run_market(client)
+    wait_screen(client)
+    pair = client.app.state.session.result.unreliable[0].pair
+    url = f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}"
+    with patch(
+        "nopoach.app.routes.pages.importlib.import_module",
+        return_value=SimpleNamespace(),
+    ):
+        dossier = client.get(url)
+        assert "Export unavailable." in dossier.text
+        assert not html.fromstring(dossier.text).xpath(
+            "//a[normalize-space(.)='Export dossier (Word)']"
+        )
+        exported = client.get(url + "/export")
+    assert exported.status_code == 503
+    assert "Export unavailable" in exported.text
+    assert not (root / "exports").exists()
 
 
 def test_failed_collector_keeps_results_and_can_retry(tmp_path):
@@ -393,10 +436,39 @@ def test_real_acceptance_markets_through_routes(client, tmp_path, scenario, occu
         )
         result = client.app.state.session.result
         pair = result.mutual[0]
+        # Presentation must stay chronological even when stored evidence arrives
+        # in a different order. The direction indexes still identify the same flow.
+        pair = replace(
+            pair,
+            flow=replace(
+                pair.flow,
+                directions=tuple(
+                    replace(direction, years=tuple(reversed(direction.years)))
+                    for direction in pair.flow.directions
+                ),
+            ),
+        )
+        client.app.state.session.result = replace(
+            result, mutual=(pair, *result.mutual[1:])
+        )
         url = f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}"
         dossier = client.get(url)
         assert "Hollow: expected. Solid: observed." in dossier.text
         assert "Break interval: 2019–2020" in dossier.text
+        dossier_tree = html.fromstring(dossier.text)
+        for direction_index in (0, 1):
+            flow_data = dossier_tree.xpath("//section[@id='flow']//details")[
+                direction_index
+            ]
+            assert flow_data.xpath(".//tbody/tr/th/text()") == [
+                str(year) for year in range(2015, 2025)
+            ]
+            links = flow_data.xpath(".//a[@hx-get]")
+            assert links[0].get("hx-get") == (
+                url + f"/moves?direction={direction_index}&year=2015"
+            )
+            assert links[0].get("hx-target") == f"#moves-{direction_index}-2015"
+            assert flow_data.get("id") == f"flow-data-{direction_index}"
         moves = client.get(
             url + "/moves?direction=0&year=2015", headers={"HX-Request": "true"}
         )
@@ -417,6 +489,24 @@ def test_real_acceptance_markets_through_routes(client, tmp_path, scenario, occu
         assert "below 20%" in response.text
         sources = tree.xpath("//div[@class='source']/h4/text()")
         assert sources[0] == "State unemployment-insurance wage records"
+
+
+def test_workforce_coverage_has_named_keyboard_scroll_region(client, tmp_path):
+    from lxml import html
+
+    open_workspace(client, tmp_path)
+    run_market(client)
+    response = wait_screen(client)
+    tree = html.fromstring(response.text)
+    coverage = tree.xpath(
+        "//div[@role='region' and "
+        "@aria-label='Workforce coverage by employer and year']"
+    )
+    assert len(coverage) == 1
+    assert coverage[0].get("tabindex") == "0"
+    assert coverage[0].xpath("./table/thead/tr/th[last()]/text()") == [
+        "Denominator source"
+    ]
 
 
 def test_parent_override_with_reason_keeps_confirmed_employers(client, tmp_path):
@@ -464,9 +554,9 @@ def test_export_uses_public_function_with_accepted_partial_result(client, tmp_pa
     pair = client.app.state.session.result.unreliable[0].pair
     captured = []
 
-    def export_dossier(*, workspace, screen, pair, output_path):
+    def export_dossier(*, workspace, screen, pair, destination):
         captured.append((workspace.root, screen, pair))
-        output_path.write_bytes(b"synthetic export contract fixture")
+        destination.write_bytes(b"synthetic export contract fixture")
 
     with patch(
         "nopoach.app.routes.pages.importlib.import_module",
