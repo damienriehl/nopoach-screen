@@ -92,8 +92,8 @@ checks every manifest hash, emits CycloneDX 1.6 JSON, and uses
 `actions/attest-build-provenance`. CI and release dependency installs use
 `uv sync --locked --group dev --group build` with the committed `uv.lock`;
 an inconsistent lockfile fails the build. Release checkout does not persist
-the repository write credential in Git configuration. Action major-version
-references must be pinned to reviewed commits by the host before publication.
+the repository write credential in Git configuration. Every third-party
+action is pinned to a full commit SHA, with its release tag in a comment.
 Repository hygiene CI fails closed when the encrypted denylist secret is absent
 and rejects data paths and confidential terms without logging matches. It
 recursively inspects gzip, zip

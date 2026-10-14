@@ -16,11 +16,11 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
       - name: Scan repository history (fails closed without secret)
@@ -33,7 +33,7 @@ jobs:
           printf '%s' "$NOPOACH_DENYLIST" > "$NOPOACH_DENYLIST_PATH"
           unset NOPOACH_DENYLIST
           python packaging/scan_repository.py --history
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - name: Install dependencies
         run: |
           uv sync --locked --group dev --group build
@@ -56,14 +56,14 @@ jobs:
             $actual = (Get-FileHash (Join-Path release $parts[1]) -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($actual -ne $parts[0]) { throw 'Release hash mismatch' }
           }
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: |
             release/nopoach-screen.zip
             release/SHA256SUMS.txt
             release/bom.cdx.json
             release/IT-REVIEW.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nopoach-screen-windows
           if-no-files-found: error
