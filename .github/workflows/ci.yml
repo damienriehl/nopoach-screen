@@ -44,8 +44,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Install runtime, development and build tools
         run: |
-          uv venv --python 3.12
-          uv pip install --python .venv -r pyproject.toml --group dev --group build
+          uv sync --locked --group dev --group build
       - name: Lint, format, types and tests
         run: |
           uv run --no-sync ruff check .

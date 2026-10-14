@@ -89,8 +89,21 @@ Nothing in MIT licensing or source publication permits disclosure of these data.
 
 Release CI builds on `windows-latest`, verifies the built app on loopback,
 checks every manifest hash, emits CycloneDX 1.6 JSON, and uses
-`actions/attest-build-provenance`. Action major-version references must be pinned
-to reviewed commits by the host before publication. Repository hygiene CI fails
-closed when the encrypted denylist secret is absent and rejects data paths and
-confidential terms without logging matches. This note describes the build;
+`actions/attest-build-provenance`. CI and release dependency installs use
+`uv sync --locked --group dev --group build` with the committed `uv.lock`;
+an inconsistent lockfile fails the build. Release checkout does not persist
+the repository write credential in Git configuration. Action major-version
+references must be pinned to reviewed commits by the host before publication.
+Repository hygiene CI fails closed when the encrypted denylist secret is absent
+and rejects data paths and confidential terms without logging matches. It
+recursively inspects gzip, zip
+and tar members, including nested archives and their member names. Per Git blob,
+inspection permits at most five nesting levels, 32 MiB of cumulative bytes
+(containers and expanded contents), and 1,000 archive members. Unreadable or
+over-limit data fails closed; archives are never extracted to disk. Git LFS
+pointers require a locally readable object whose SHA-256 and size
+match the pointer; that object is inspected with the same limits. The scanner
+never fetches LFS objects, so an unavailable historical object blocks release.
+Opaque data files fail closed; web font and image assets retain existing term
+matching without text-decoding requirements. This note describes the build;
 an agency's own IT approval remains its decision.

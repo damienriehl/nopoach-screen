@@ -48,8 +48,7 @@ policy. Review release provenance with `gh attestation verify nopoach-screen.zip
 Python 3.12 users can run from source with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-uv venv --python 3.12
-uv pip install --python .venv -r pyproject.toml --group dev
+uv sync --locked --group dev
 uv run --no-sync python -m nopoach.app.main
 ```
 
