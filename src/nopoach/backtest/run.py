@@ -18,6 +18,7 @@ import yaml
 from nopoach.market.define import Market
 from nopoach.market.sufficiency import SignalSufficiency
 from nopoach.pipeline import PairReferences, ScreenResult, run_screen
+from nopoach.rank import wording
 from nopoach.rank.aggregate import RankedPair
 from nopoach.resolve.employers import normalize_employer
 from nopoach.store.workspace import Workspace
@@ -33,6 +34,17 @@ PERCENTILE_METHOD = (
     "Percentile = 100 * (population - rank) / (population - 1); "
     "a singleton is 100. Higher is better. Insufficient pairs omitted by the "
     "pipeline are not in that denominator. Partial rankings are not full-market ranks."
+)
+INPUT_DISCLOSURE_NOTE = (
+    "These are the stored receipts referenced by the whole-market screen, "
+    "including comparison employers; they are not exact causal lineage. Source "
+    "labels and classes do not establish lawful use, pre-disclosure availability, "
+    "or empirical validation. Unrecorded vendor, dataset, or version details need "
+    "a private intake supplement."
+)
+SYNTHETIC_INPUT_NOTICE = (
+    "Synthetic input is present. Synthetic records demonstrate software behavior "
+    "and do not establish empirical validation or support an enforcement lead."
 )
 
 
@@ -82,6 +94,19 @@ class PairResult:
 
 
 @dataclass(frozen=True)
+class InputSource:
+    receipt_id: str
+    source: str | None
+    provenance_classes: tuple[str, ...]
+    collection_method: str | None
+    collected_at: str | None
+    location: str | None
+    sha256: str | None
+    status: Literal["resolved", "missing"]
+    synthetic: bool
+
+
+@dataclass(frozen=True)
 class CaseResult:
     case: CaseDefinition
     market: Market
@@ -92,6 +117,9 @@ class CaseResult:
     partial_screen: bool
     references: tuple[PairReferences, ...]
     ranking_method: str
+    input_sources: tuple[InputSource, ...]
+    input_disclosure_note: str
+    synthetic_input_notice: str | None
 
 
 @dataclass(frozen=True)
@@ -218,6 +246,7 @@ def run_backtest(
     for case, market in selected:
         cutoff = case.disclosure_date - timedelta(days=1)
         screen = run_screen(workspace, market, as_of=cutoff)
+        input_sources = _input_sources(workspace, screen.references)
         results.append(
             CaseResult(
                 case,
@@ -232,6 +261,11 @@ def run_backtest(
                 screen.partial_screen,
                 screen.references,
                 screen.method,
+                input_sources,
+                INPUT_DISCLOSURE_NOTE,
+                SYNTHETIC_INPUT_NOTICE
+                if any(source.synthetic for source in input_sources)
+                else None,
             )
         )
     # Workspace.open already enforces an out-of-repository root. Resolve the
@@ -266,6 +300,54 @@ def _json_value(value: object) -> str:
     raise TypeError(f"Cannot serialize {type(value).__name__}")
 
 
+def _input_sources(
+    workspace: Workspace, references: tuple[PairReferences, ...]
+) -> tuple[InputSource, ...]:
+    """Describe only receipts cited by the screen, retaining missing IDs."""
+    receipt_ids = sorted({item for ref in references for item in ref.provenance_ids})
+    receipts = {receipt.id: receipt for receipt in workspace.provenance.records()}
+    classes: dict[str, set[str]] = {}
+    if "imports" in workspace.table_names():
+        for receipt_id, provenance_class in workspace.connection.execute(
+            "SELECT provenance_id, provenance_class FROM imports"
+        ).fetchall():
+            classes.setdefault(receipt_id, set()).add(provenance_class)
+    disclosed = []
+    for receipt_id in receipt_ids:
+        receipt = receipts.get(receipt_id)
+        declared = tuple(sorted(classes.get(receipt_id, ())))
+        if receipt is None:
+            disclosed.append(
+                InputSource(
+                    receipt_id,
+                    None,
+                    declared,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "missing",
+                    "synthetic" in declared,
+                )
+            )
+            continue
+        synthetic = "synthetic" in declared or receipt.collection_method == "synthetic"
+        disclosed.append(
+            InputSource(
+                receipt.id,
+                receipt.source,
+                declared,
+                receipt.collection_method,
+                receipt.collected_at.isoformat(),
+                receipt.url,
+                receipt.sha256,
+                "resolved",
+                synthetic,
+            )
+        )
+    return tuple(disclosed)
+
+
 def _markdown(report: BacktestReport) -> str:
     lines = ["# Known-case backtest", "", LIMITATION, "", PERCENTILE_METHOD, ""]
     for result in report.cases:
@@ -295,6 +377,44 @@ def _markdown(report: BacktestReport) -> str:
             verdict = getattr(result.sufficiency, name)
             lines.append(f"- {name}: {verdict.status} — {verdict.reason}")
         lines.append("")
+        lines.extend(["### Input sources", "", result.input_disclosure_note, ""])
+        if result.synthetic_input_notice:
+            lines.extend([result.synthetic_input_notice, ""])
+        if not result.input_sources:
+            lines.extend(
+                [
+                    "No input receipts were referenced by this screen; "
+                    "input disclosure is unavailable.",
+                    "",
+                ]
+            )
+        for source in result.input_sources:
+            if source.status == "missing":
+                classes = (
+                    ", ".join(source.provenance_classes) or wording.SOURCE_CLASS_UNKNOWN
+                )
+                lines.append(
+                    f"- Missing receipt: provenance:{source.receipt_id}. "
+                    f"Provenance class: {classes}; metadata unavailable."
+                )
+            else:
+                classes = (
+                    ", ".join(source.provenance_classes) or wording.SOURCE_CLASS_UNKNOWN
+                )
+                lines.append(
+                    "- "
+                    + wording.source_entry(
+                        source.source or "unknown",
+                        classes,
+                        source.collection_method or "unknown",
+                        source.location or "unknown",
+                        source.collected_at or "unknown",
+                        source.sha256 or "unknown",
+                        source.receipt_id,
+                    )
+                )
+        if result.input_sources:
+            lines.append("")
         for pair in result.pairs:
             lines.extend([f"### {pair.parties[0]} / {pair.parties[1]}", ""])
             if pair.rank is None:

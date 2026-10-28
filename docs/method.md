@@ -172,7 +172,10 @@ individual evidence. Retain the reviewed build, SBOM, release hashes, workspace,
 market decisions, seed and input receipts under agency records policy.
 
 Historical-case backtests must use only information available before the public
-disclosure cutoff. Missing parties, histories or other required evidence yield
+disclosure cutoff. The current harness enforces employment and event dates, not
+the date on which a record became available; analysts must independently support
+pre-disclosure availability and retain that limitation in reports. Missing
+parties, histories or other required evidence yield
 “insufficient data,” not a guessed rank. Actual historical-case runs and the
 live pilot await lawfully supplied person-level records. Synthetic scenarios
 exercise planted mutual suppression, one-way suppression and thin coverage,
