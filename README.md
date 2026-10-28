@@ -73,7 +73,9 @@ and exports stay on the agency machine; configured public-source requests are
 the only intended outbound application traffic.
 
 Read [the method](docs/method.md) before relying on scores, intervals or
-rankings. Real historical-case validation and live pilot work require lawful
+rankings. Analysts should use the separate [historical validation and pilot
+procedure](docs/validation.md) to predeclare review criteria and preserve private
+evidence. Real historical-case validation and live pilot work require lawful
 person-level data and remain outstanding. Synthetic tests do not establish
 real-world accuracy. The code is [MIT licensed](LICENSE); see
 [third-party notices and source terms](THIRD-PARTY.md).

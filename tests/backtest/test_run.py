@@ -3,10 +3,16 @@ from datetime import date
 
 import pyarrow as pa
 
-from nopoach.backtest.run import CaseDefinition, load_cases, run_backtest
+from nopoach.backtest.run import (
+    CaseDefinition,
+    _input_sources,
+    load_cases,
+    run_backtest,
+)
 from nopoach.collect.sec_people import parse_filing
 from nopoach.imports.loader import import_records
 from nopoach.market.define import Employer, Geography, Market
+from nopoach.pipeline import PairReferences
 from nopoach.signals.clauses import ClauseDocument, store_document
 from nopoach.store.workspace import Workspace
 from nopoach.synth.generator import generate_market
@@ -100,6 +106,32 @@ def synthetic_case(name="AE1"):
     )
 
 
+def references(*receipt_ids):
+    return (PairReferences("a", "b", (), (), (), (), (), (), tuple(receipt_ids)),)
+
+
+def test_input_disclosure_retains_unclassified_missing_and_empty_receipts(tmp_path):
+    with Workspace.open(tmp_path / "disclosures") as workspace:
+        receipt = workspace.provenance.append(
+            source="Invented records",
+            url="file:invented",
+            method="IMPORT",
+            body=b"invented",
+        )
+        disclosed = _input_sources(
+            workspace, references("missing-receipt", receipt.id, receipt.id)
+        )
+        assert [source.receipt_id for source in disclosed] == sorted(
+            ["missing-receipt", receipt.id]
+        )
+        resolved = next(source for source in disclosed if source.status == "resolved")
+        assert resolved.provenance_classes == ()
+        assert not resolved.synthetic
+        missing = next(source for source in disclosed if source.status == "missing")
+        assert missing.source is None and missing.sha256 is None
+        assert _input_sources(workspace, references()) == ()
+
+
 def test_public_case_catalog():
     cases = {case.id: case for case in load_cases()}
     assert set(cases) == {
@@ -140,12 +172,22 @@ def test_planted_pair_rank_percentile_and_readable_workspace_report(tmp_path):
         assert report.markdown_path.is_relative_to(workspace.root)
         stored = json.loads(report.json_path.read_text())
         assert stored["cases"][0]["pairs"][0]["rank"] == 1
+        sources = stored["cases"][0]["input_sources"]
+        assert len(sources) == 1
+        assert sources[0]["source"] == "synthetic"
+        assert sources[0]["collection_method"] == "synthetic"
+        assert sources[0]["sha256"]
+        assert stored["cases"][0]["synthetic_input_notice"]
         text = report.markdown_path.read_text()
         assert "Synthetic Amber Hospital" in text
         assert "1 / 15" in text and "100.00" in text
         assert "record-availability" in text
         assert "insufficient" in text  # Missing bulk-feed completeness is disclosed.
         assert "Synthetic ground truth" in text
+        assert "### Input sources" in text
+        assert "Content SHA256" in text
+        assert "Synthetic input is present" in text
+        assert text.index("### Input sources") < text.index("Public-record sources:")
 
 
 def test_insufficient_coverage_has_no_rank(tmp_path):
@@ -222,6 +264,16 @@ def test_high_tech_sec_signals_and_strict_disclosure_cutoff(tmp_path):
         market = Market(frozenset({"15-1132"}), Geography("metro", "41940"), 2005, 2011)
         report = run_backtest(workspace, {case.id: market}, cases=(case,))
         result = report.cases[0]
+        disclosed = result.input_sources
+        assert disclosed == tuple(
+            sorted(disclosed, key=lambda source: source.receipt_id)
+        )
+        assert any(
+            source.source == "SEC fixture"
+            and source.provenance_classes == ("synthetic",)
+            for source in disclosed
+        )
+        assert result.synthetic_input_notice
         pair = next(p for p in result.pairs if p.parties == ("Apple", "Google"))
         assert result.cutoff == date(2010, 9, 23)
         assert pair.status == "insufficient data"
