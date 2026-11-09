@@ -160,3 +160,57 @@ def test_all_five_explanations_remain_visible_when_data_is_missing():
     }
     assert all(c.status == "not_testable" and c.reason for c in result.values())
     assert "no non-compete extractor" in result["non_compete_prevalence"].reason
+
+
+def reviewed_population(employer, positives, total):
+    from nopoach.signals.noncompetes import EmployerPrevalence
+
+    return EmployerPrevalence(
+        employer,
+        "Synthetic reviewed population",
+        "All declared synthetic workers",
+        "synthetic",
+        positives,
+        total,
+        total,
+        0,
+        True,
+        positives / total >= 0.5,
+        f"{positives}/{total} reviewed; synthetic scope only",
+        (),
+        ("contract-source",),
+    )
+
+
+def test_noncompetes_pass_on_either_complete_population_and_fail_only_on_both():
+    high = EmployerExplanationData(
+        noncompete_prevalence=reviewed_population("a", 6, 10)
+    )
+    low_a = EmployerExplanationData(
+        noncompete_prevalence=reviewed_population("a", 2, 10)
+    )
+    low_b = EmployerExplanationData(
+        noncompete_prevalence=reviewed_population("b", 4, 10)
+    )
+    result = checks(high)["non_compete_prevalence"]
+    assert result.status == "passed"
+    assert result.measurements["a_numerator"] == 6
+    assert result.measurements["a_denominator"] == 10
+    assert result.measurements["threshold"] == 0.5
+    assert result.provenance_ids == ("contract-source",)
+    assert checks(low_a, low_b)["non_compete_prevalence"].status == "failed"
+    assert checks(low_a)["non_compete_prevalence"].status == "not_testable"
+
+
+def test_geodesic_footprints_use_nearest_supplied_latitude_longitude():
+    result = checks(
+        EmployerExplanationData(worksites_latlon=((0, 0),)),
+        EmployerExplanationData(worksites_latlon=((0, 10), (0, 20))),
+    )["geographic_separation"]
+    assert result.status == "passed"
+    assert result.measurements["distance_km"] == pytest.approx(1111.95, abs=0.01)
+    reverse = checks(
+        EmployerExplanationData(worksites_latlon=((0, 10), (0, 20))),
+        EmployerExplanationData(worksites_latlon=((0, 0),)),
+    )["geographic_separation"]
+    assert reverse.measurements["distance_km"] == result.measurements["distance_km"]
