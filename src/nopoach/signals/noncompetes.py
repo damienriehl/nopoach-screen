@@ -82,6 +82,7 @@ def extract_noncompetes(
     if len(text) > 65536:
         raise ValueError("Contract text exceeds the 65536-character field limit")
     candidates = []
+    document_hash = None
     for match in re.finditer(r"[^.!?]+(?:[.!?]|$)", text):
         sentence = match.group().strip()
         if not (
@@ -93,7 +94,6 @@ def extract_noncompetes(
         negated = bool(_NEGATED.search(sentence))
         if not (_DUTY.search(sentence) or negated):
             continue
-        # Solicitation alone is not a ban on the individual's subsequent work.
         if re.search(r"\bsolicit", sentence, re.I) and not re.search(
             r"\b(?:work|working|join|employed|compete)\b", sentence, re.I
         ):
@@ -113,10 +113,13 @@ def extract_noncompetes(
         classification: Literal["candidate", "negated", "uncertain"] = (
             "negated" if negated else "candidate" if actor else "uncertain"
         )
-        identity = f"{employer_id}\0{document_id}\0{text}\0{first}\0{last}"
+        if document_hash is None:
+            document_hash = sha256(f"{employer_id}\0{document_id}\0{text}\0".encode())
+        identity_hash = document_hash.copy()
+        identity_hash.update(f"{first}\0{last}".encode())
         candidates.append(
             NonCompeteCandidate(
-                sha256(identity.encode()).hexdigest(),
+                identity_hash.hexdigest(),
                 employer_id,
                 document_id,
                 document_date,
