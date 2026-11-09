@@ -3,6 +3,38 @@
 Work source: `docs/plans/2026-11-09-0819-feat-nopo-3-analytical-checks-plan.md`.
 Branch: `drawdown/nopo-3`. Item kind: planned.
 
+## Final verification
+
+All three analytical checks and their local review paths are implemented. All
+seven independently validated review findings are fixed; none remain unapplied.
+
+| Check | Final result |
+|---|---|
+| `uv run --no-sync pytest -q` | 530 passed, 1 existing skip, 14 browser/live tests deselected; 128.46 seconds. |
+| `uv run --no-sync pytest -m browser tests/app/test_e2e.py -q` | 6 passed; 131.95 seconds, after the review fixes. |
+| `uv run --no-sync pytest -m network_off -q` | 25 passed, 520 deselected; 6.61 seconds. |
+| Ruff and formatting | Both passed across the repository. |
+| Strict mypy | Passed for 50 source files. |
+| Repository history data-file scan | Passed. No confidential denylist was supplied or accessed; its term scan remains for the controller. |
+| Existing test preservation | All 62 original test/helper definitions in changed baseline test files are unchanged. |
+| Visual evidence | Four actual Playwright captures inspected and committed. The final run refreshed the market capture; the other three matched the inspected files. |
+
+The browser suite exercised the following pages and actions without skips:
+
+| Route or action | Result |
+|---|---|
+| Workspace and refusal pages (`/`) | Pass, including accessibility. |
+| Ordinary and flow market review (`/market`) | Pass, including keyboard review and manual edits. |
+| Analytical imports and retained selections (`/imports`) | Pass for all three local input types. |
+| Group proposal and confirmation | Pass with the posted proposal identity. |
+| Ranked screen, progress and partial acceptance | Pass, including tested and unavailable analytical states. |
+| Pair dossier, move evidence and Word download | Pass with the frozen analytical context. |
+
+The analytical browser workflow asserts zero page errors. Axe, 360-pixel layout
+checks, escaped source text and loopback-only request assertions passed. Browser
+fixtures closed their local servers and Chromium sessions. Windows CI and the
+campaign publication/merge gate remain controller responsibilities.
+
 ## Reverified baseline
 
 The build began from the committed plan at `7874c7a`, with application base
