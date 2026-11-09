@@ -65,6 +65,20 @@ NON_COMPETE_UNAVAILABLE = (
     "no non-compete extractor evidence was supplied."
 )
 RATE_UNAVAILABLE = "unavailable"
+ANALYTICAL_HEADINGS = {
+    "cluster": "Flow market proposal and selection",
+    "public": "Public mobility context",
+    "contracts": "Contract review context",
+}
+PUBLIC_CONTEXT_COLUMNS = (
+    "Year",
+    "Public total",
+    "Modeled total",
+    "Public share",
+    "Modeled share",
+    "Difference (percentage points)",
+)
+PUBLIC_CONTEXT_STATUS = {"context_only": "Context only", "unavailable": "Unavailable"}
 
 
 def pair_summary(

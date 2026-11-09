@@ -17,6 +17,7 @@ from docx.shared import Inches, Pt, RGBColor
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
+from nopoach.market.define import Market, scope_description
 from nopoach.market.sufficiency import Verdict
 from nopoach.pipeline import ScreenResult
 from nopoach.rank import wording
@@ -202,6 +203,8 @@ def _sources(
 ) -> None:
     # Expected flow uses the wider market, so retain its receipts too.
     receipt_ids = {r for refs in screen.references for r in refs.provenance_ids}
+    if screen.analytical is not None:
+        receipt_ids -= {source.provenance_id for source in screen.analytical.sources}
     classes: dict[str, str] = {}
     if "imports" in workspace.table_names():
         classes = dict(
@@ -232,7 +235,168 @@ def _sources(
         )
         if classification == "synthetic":
             document.add_paragraph(wording.SYNTHETIC_NOTICE)
+    if screen.analytical is not None:
+        for source in screen.analytical.sources:
+            document.add_paragraph(
+                wording.source_entry(
+                    str(source.metadata.get("source", source.source)),
+                    str(
+                        source.metadata.get(
+                            "provenance_class", wording.SOURCE_CLASS_UNKNOWN
+                        )
+                    ),
+                    source.collection_method,
+                    source.url,
+                    source.collected_at,
+                    source.raw_sha256,
+                    source.provenance_id,
+                )
+            )
+            document.add_paragraph(
+                f"Analytical bundle: {source.bundle_id}. "
+                f"Manifest SHA256: {source.manifest_sha256}. "
+                f"Normalized SHA256: {source.normalized_sha256 or 'not applicable'}. "
+                f"Transformation: {source.transformation or 'none'}."
+            )
     document.add_paragraph(wording.RECORD_SET_NOTE)
+
+
+def _analytical_context(
+    document: WordDocument, screen: ScreenResult, pair: RankedPair
+) -> None:
+    context = screen.analytical
+    if context is None:
+        return
+    if context.cluster_proposal is not None and context.cluster_selection is not None:
+        proposal, selection = context.cluster_proposal, context.cluster_selection
+        document.add_heading(wording.ANALYTICAL_HEADINGS["cluster"], level=1)
+        document.add_paragraph(
+            f"Method: {proposal.method}. Proposal: {proposal.digest}. "
+            f"{proposal.reason} Pre-period: {proposal.settings.pre_start_year}–"
+            f"{proposal.settings.pre_end_year}; "
+            f"groups: {proposal.settings.groups}; seed: {proposal.settings.seed}. "
+            f"Observed training moves: {proposal.move_count}."
+        )
+        settings = proposal.settings
+        document.add_paragraph(
+            f"Restarts: {settings.restarts}; search sweeps: {settings.sweeps}; "
+            f"fitting sweeps: {settings.fitting_sweeps}; "
+            f"candidate refit limit: {settings.candidate_refits}; "
+            f"tolerance: {settings.tolerance:g}; "
+            f"employer limit: {settings.max_employers}. "
+            f"Log likelihood: {proposal.log_likelihood}; "
+            f"one-group log likelihood: {proposal.one_group_log_likelihood}; "
+            f"residual: {proposal.residual}; "
+            f"restart agreement: {proposal.restart_agreement}. "
+            f"Method versions: NumPy {proposal.numpy_version}; "
+            f"SciPy {proposal.scipy_version}."
+        )
+        document.add_paragraph(
+            "Training sources: " + "; ".join(proposal.source_references)
+        )
+        for label, members in (
+            ("Candidate employers", selection.universe),
+            ("Fitted employers", selection.fitted_employer_ids),
+            ("Final employers", selection.final_employer_ids),
+            ("Added employers", selection.added_employer_ids),
+            ("Removed employers", selection.removed_employer_ids),
+            ("Excluded employers", selection.excluded_employer_ids),
+        ):
+            document.add_paragraph(
+                f"{label}: "
+                f"{', '.join(context.employer_name(e) for e in members) or 'none'} "
+                f"(count {len(members)})."
+            )
+        document.add_paragraph(
+            f"Cross-boundary pairs omitted: {selection.cross_boundary_pair_count}. "
+            f"All omitted pairs: {selection.omitted_pair_count}."
+        )
+        for excluded in selection.unassigned:
+            document.add_paragraph(
+                f"Unassigned employer {context.employer_name(excluded.employer_id)}: "
+                f"{excluded.reason}"
+            )
+        for limitation in proposal.limitations:
+            document.add_paragraph(limitation)
+    if context.public_context is not None:
+        public = context.public_context
+        document.add_heading(wording.ANALYTICAL_HEADINGS["public"], level=1)
+        document.add_paragraph(
+            f"{wording.PUBLIC_CONTEXT_STATUS[public.status]}: {public.reason} "
+            f"Release: {public.release}; "
+            f"release date: {public.release_date}. "
+            f"Citation: {public.source_reference}. "
+            f"Excluded source rows: {public.excluded_rows}."
+        )
+        if public.annual:
+            table = document.add_table(rows=1, cols=len(wording.PUBLIC_CONTEXT_COLUMNS))
+            for cell, label in zip(
+                table.rows[0].cells, wording.PUBLIC_CONTEXT_COLUMNS, strict=True
+            ):
+                cell.text = label
+            for row in public.annual:
+                for cell, value in zip(
+                    table.add_row().cells,
+                    (
+                        str(row.year),
+                        f"{row.public_count:g}",
+                        f"{row.modeled_count:.6g}",
+                        f"{row.public_share:.2%}",
+                        f"{row.modeled_share:.2%}",
+                        f"{row.difference_percentage_points:.2f}",
+                    ),
+                    strict=True,
+                ):
+                    cell.text = value
+        for excluded_year in public.excluded_years:
+            document.add_paragraph(
+                f"Excluded year {excluded_year.year}: {excluded_year.reason}"
+            )
+        for difference in public.scope_differences:
+            document.add_paragraph(difference)
+    if context.contracts is not None:
+        contracts = context.contracts
+        pair_ids = {pair.employer_a_id, pair.employer_b_id}
+        document.add_heading(wording.ANALYTICAL_HEADINGS["contracts"], level=1)
+        document.add_paragraph(f"Method: {contracts.method}.")
+        for employer in contracts.employers:
+            if employer.employer_id not in pair_ids:
+                continue
+            denominator = employer.denominator
+            document.add_paragraph(
+                f"Employer {context.employer_name(employer.employer_id)}: "
+                f"{employer.numerator}/"
+                f"{denominator if denominator is not None else 'unknown'} "
+                f"declared workers have applicable positive reviews. "
+                f"Reviewed workers: {employer.reviewed_workers}; "
+                f"unresolved workers: {employer.unresolved_workers}. "
+                f"Complete: {employer.complete}; "
+                f"descriptive threshold: {employer.threshold:.0%}. "
+                f"Population: {employer.population_description}. "
+                f"Sampling: {employer.sampling_basis}. "
+                f"Scope: {employer.scope}. {employer.reason}"
+            )
+        for candidate in contracts.candidates:
+            if candidate.employer_id not in pair_ids:
+                continue
+            document.add_paragraph(candidate.text)
+            document.add_paragraph(
+                f"Document {candidate.document_id}; "
+                f"employer {context.employer_name(candidate.employer_id)}; "
+                f"document date {candidate.document_date or 'unknown'}; "
+                f"characters {candidate.start}–{candidate.end} (end exclusive). "
+                f"Classification: {candidate.classification}; "
+                f"review: {candidate.review}. "
+                f"Duration: {', '.join(candidate.duration) or 'not extracted'}. "
+                f"Exceptions: {'; '.join(candidate.exceptions) or 'not extracted'}. "
+                f"Uncertainty: {'; '.join(candidate.uncertainty) or 'none recorded'}. "
+                f"Candidate: {candidate.id}. Citations: "
+                + ", ".join(f"provenance:{p}" for p in candidate.provenance_ids)
+            )
+        for limitation in contracts.limitations:
+            document.add_paragraph(limitation)
+    for limitation in context.limitations + context.covariate_omissions:
+        document.add_paragraph(limitation)
 
 
 def export_dossier(
@@ -255,8 +419,8 @@ def export_dossier(
         document.add_paragraph(wording.PARTIAL_SCREEN_BANNER).runs[0].bold = True
     document.add_heading(wording.DOSSIER_HEADINGS["summary"], level=1)
     document.add_paragraph(pair.summary)
-    document.add_paragraph(
-        wording.dossier_scope(
+    if isinstance(screen.market, Market):
+        scope = wording.dossier_scope(
             pair.employer_a_name,
             pair.employer_b_name,
             sorted(screen.market.occupation_codes),
@@ -266,7 +430,14 @@ def export_dossier(
             screen.coverage.market.end_year,
             screen.as_of.isoformat() if screen.as_of else None,
         )
-    )
+    else:
+        scope = (
+            f"{pair.employer_a_name} / {pair.employer_b_name}. "
+            f"{scope_description(screen.coverage.market)} "
+            "Historical cutoff: "
+            f"{screen.as_of.isoformat() if screen.as_of else 'none'}."
+        )
+    document.add_paragraph(scope)
     document.add_heading(wording.DOSSIER_HEADINGS["flow"], level=1)
     _flow_chart(document, screen, pair)
     document.add_heading(wording.DOSSIER_HEADINGS["clauses"], level=1)
@@ -326,6 +497,7 @@ def export_dossier(
         )
     document.add_heading(wording.DOSSIER_HEADINGS["coverage"], level=1)
     _coverage(document, screen, pair)
+    _analytical_context(document, screen, pair)
     document.add_heading(wording.DOSSIER_HEADINGS["sources"], level=1)
     _sources(document, workspace, screen)
     document.add_heading(wording.DOSSIER_HEADINGS["method"], level=1)
