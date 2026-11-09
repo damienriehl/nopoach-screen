@@ -155,11 +155,17 @@ Pairs with no firing signals remain visible. Because sources can overlap,
 multiple signals must not be treated as statistically independent proof.
 
 Five descriptive checks consider geographic separation, pay gaps, occupation
-mismatch, generally low lateral hiring, and individual non-compete prevalence.
+mismatch, generally low lateral hiring, and documented worker non-competes.
 “Passed” means supplied data supports a possible innocent explanation; “failed”
 means the check did not support it, without ruling it out. “Not testable” means
-necessary evidence or an extractor is absent. Version 1 has no non-compete
-prevalence extractor. The checks never remove a pair or reduce its rank.
+necessary evidence or extractor results are absent. Complete documents supplied
+through the existing local clause intake are also checked for operative worker
+restrictions. Findings retain their excerpt, attribution, stated scope, term,
+exceptions, offsets, filing and receipt; deliberate re-ingestion is required for
+older workspaces. A document match is not a representative worker sample, so
+non-compete prevalence cannot be estimated from these documents, and the result
+makes no finding about enforceability, operation or causation. The checks never
+remove a pair or reduce its rank.
 LCA offered wages are a visa-worker proxy rather than a workforce census.
 
 ## Review, reproduce and use in further inquiry

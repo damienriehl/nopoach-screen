@@ -16,6 +16,7 @@ This is a metro-scale distance approximation, not a geodesic measurement.
 """
 
 import json
+import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
@@ -26,6 +27,7 @@ from uuid import uuid4
 
 from nopoach.catalog.recommend import Recommendation, recommend_sources
 from nopoach.collect.dol import DolRecord, load_dol_records
+from nopoach.imports.schema import TITLE_SOC
 from nopoach.market.coverage import (
     CoverageReport,
     MarketWorker,
@@ -35,12 +37,13 @@ from nopoach.market.coverage import (
 from nopoach.market.define import Employer, Geography, Market, soc_code
 from nopoach.market.sufficiency import SignalSufficiency, Verdict, signal_sufficiency
 from nopoach.rank.aggregate import RankedPair, rank_pairs
-from nopoach.rank.explanations import EmployerExplanationData
+from nopoach.rank.explanations import EmployerExplanationData, NonCompeteEvidence
 from nopoach.signals.clauses import (
     Clause,
     ClauseDocument,
     ClauseSignal,
     extract_clauses,
+    non_competes,
 )
 from nopoach.signals.clauses import (
     score_pairs as score_clauses,
@@ -333,6 +336,38 @@ def _explanation_inputs(
                 and (i == 0 or history[i - 1].employer_id != p.employer_id)
             ):
                 hires[p.employer_id].add((person, p.start_date))
+    findings: dict[str, list[NonCompeteEvidence]] = defaultdict(list)
+    employers_by_id = {employer.id: employer for employer in employers}
+    title_soc = {title: code for title, code in TITLE_SOC}
+    for clause in non_competes(workspace):
+        if not start <= clause.filed_on <= end or len(clause.employer_ids) != 1:
+            continue
+        employer = employers_by_id.get(clause.employer_ids[0])
+        if employer is None:
+            continue
+        scope = (clause.scope or "").casefold().rstrip("s")
+        mapped = title_soc.get(scope) or title_soc.get(scope.rstrip("s"))
+        broad = scope in {"employee", "worker"}
+        relevant = broad or (mapped is not None and mapped in market.occupation_codes)
+        conditional = bool(
+            re.search(
+                r"\b(?:if|unless|upon|provided that|subject to)\b",
+                clause.text,
+                re.I,
+            )
+        )
+        eligible = relevant and not conditional
+        if conditional:
+            reason = "an activation condition is unresolved"
+        elif not clause.scope:
+            reason = "the stated worker group is unknown"
+        elif not relevant:
+            reason = f"the stated scope ({clause.scope}) does not match this occupation"
+        else:
+            reason = "documentary support"
+        findings[employer.id].append(
+            NonCompeteEvidence(clause, employer.name, eligible, reason)
+        )
     result = {}
     for employer in employers:
         counts = occupation_people[employer.id]
@@ -347,6 +382,7 @@ def _explanation_inputs(
             if exposure[employer.id]
             else None,
             tuple(sorted(receipts[employer.id])),
+            tuple(findings[employer.id]),
         )
     locations = {
         employer: (
@@ -464,9 +500,11 @@ def _references(workspace: Workspace, pair: RankedPair) -> PairReferences:
         positions.update(
             (p.id, p.provenance_id) for tie in pair.ties.ties for p in tie.positions
         )
-    clause_ids = (
-        tuple(sorted({c.id for c in pair.clauses.clauses})) if pair.clauses else ()
-    )
+    explanation_clauses = {
+        evidence.clause.id for check in pair.explanations for evidence in check.evidence
+    }
+    scored_clauses = {c.id for c in pair.clauses.clauses} if pair.clauses else set()
+    clause_ids = tuple(sorted(scored_clauses | explanation_clauses))
     filing_ids = tuple(
         sorted(
             {
