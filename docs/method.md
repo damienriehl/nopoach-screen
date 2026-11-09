@@ -105,8 +105,10 @@ shrunken ratio is below **0.5**, with the pair passing the reliability gate.
 The false-discovery convention addresses multiple comparisons under statistical
 assumptions; it is not a guarantee that 90% of leads reflect agreements.
 Model misspecification, dependent comparisons and incomplete histories can
-invalidate that interpretation. Seed, placebo count and model settings are
-retained for reproducibility.
+invalidate that interpretation. Newly captured validation packets retain the
+actual seed, placebo count, false-discovery threshold, fitted prior and model.
+Legacy reports did not retain all of these settings and cannot be retrofitted
+into packets reliably.
 
 Both directions firing yields possible mutual flow suppression. One firing
 direction is listed separately as a **possible unilateral no-hire policy**;

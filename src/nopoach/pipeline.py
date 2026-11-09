@@ -88,6 +88,7 @@ class ScreenResult:
     references: tuple[PairReferences, ...]
     method: str
     explanation_method: str
+    execution: dict[str, Any] | None = None
 
 
 def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
@@ -635,6 +636,13 @@ def run_screen(
             references,
             ranked.method,
             ranked.explanation_method,
+            {
+                "flow_model": flow.model,
+                "prior_strength": flow.prior_strength,
+                "fdr": flow.fdr,
+                "placebo_count": flow.placebo_count,
+                "seed": flow.seed,
+            },
         )
     finally:
         view.close()
@@ -658,6 +666,7 @@ def _persist(workspace: Workspace, result: ScreenResult) -> None:
         "as_of": result.as_of.isoformat() if result.as_of else None,
         "accept_partial": result.accept_partial,
         "references": [asdict(r) for r in result.references],
+        "execution": result.execution,
     }
     summary = {
         "version": 1,

@@ -40,14 +40,20 @@ The collaborator sets the success rule and denominator before the first
 empirical run. Do not change them after viewing results. An insufficient case is
 not a success, and mutual and one-way rankings remain separate lists.
 
-## Run the existing analyst API
+## Capture a reproducible validation packet
 
 The catalog supplies public case facts, not markets. Define each market
 explicitly and run in an external agency workspace. This invented example shows
 the API shape; replace every placeholder privately:
 
 ```python
-from nopoach.backtest.run import load_cases, run_backtest
+from nopoach.backtest.packet import (
+    SourceSupplement,
+    create_packet,
+    replay_packet,
+    verify_packet,
+)
+from nopoach.backtest.run import load_cases
 from nopoach.market.define import Geography, Market
 from nopoach.store.workspace import Workspace
 
@@ -59,14 +65,41 @@ market = Market(
     2010,
 )
 with Workspace.open("/agency-controlled/path/validation-workspace") as workspace:
-    report = run_backtest(
+    packet = create_packet(
         workspace,
         {"high-tech": market},
         cases=cases,
         party_ids={"Ambiguous public party": "reviewed-employer-id"},
+        supplements=(
+            SourceSupplement(
+                "reviewed-receipt-id",
+                provider="Invented Provider",
+                dataset="Invented History",
+                version="2020 snapshot",
+                use_basis="Agency-reviewed historical method validation",
+                availability_evidence="Private intake note reference",
+            ),
+        ),
+        evaluation_protocol={"rule": "Privately predeclared invented rule"},
     )
-    print(report.json_path, report.markdown_path)
+    print(packet.path, packet.manifest_sha256)
 ```
+
+The new directory is under `exports/validation/` in the agency workspace. It
+contains the frozen request, source and environment disclosures, both ordinary
+reports, a review index, and a final manifest. Keep the entire workspace and
+packet private. A failed attempt has no manifest and is not complete; packet
+creation never bundles the database or raw input files.
+
+After closing writable workspace connections, use `verify_packet(packet.path)`
+for a file-only integrity check. Pass an explicit `workspace=` path and
+`check_software=True` to check retained inputs and software separately. This
+read-only operation neither initializes nor repairs storage. To replay,
+explicitly reopen the retained workspace and call
+`replay_packet(packet.path, workspace)`. Replay refuses mismatched prerequisites,
+writes a fresh report and packet, and never changes the original. Reproduction
+means substantive outcomes agree; it does not prove historical availability or
+empirical accuracy.
 
 Omit `party_ids` when conservative name resolution is unambiguous. Review both
 reports. Their input-source section covers the whole stored screen reference set,
@@ -77,7 +110,7 @@ event-date limitation. Public case citations are separate from input sources.
 The repository's synthetic SEC example is a software rehearsal, not a real
 High-Tech validation.
 
-Record privately: run/build ID ____; report paths and hashes ____; selected
+Record privately: run/build ID ____; packet path and manifest hash ____; selected
 market ____; receipt set ____; partial-screen decision ____; rank and denominator
 ____; insufficient cases ____; predeclared rule met (yes/no) ____; reviewer and
 date ____; limitations and follow-up ____.

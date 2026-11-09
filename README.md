@@ -80,6 +80,14 @@ person-level data and remain outstanding. Synthetic tests do not establish
 real-world accuracy. The code is [MIT licensed](LICENSE); see
 [third-party notices and source terms](THIRD-PARTY.md).
 
+Analysts can opt into a private reproducible validation packet around a newly
+run backtest. It records the request, receipt-linked provider and dataset
+disclosures, retained-input and software identities, and both ordinary reports;
+it supports read-only checks and explicit replay. See the
+[validation procedure](docs/validation.md). Packets stay in the external agency
+workspace under `exports/validation/` and must never enter this repository.
+Reproduction is not empirical validation.
+
 ## Build and contribute
 
 ```sh
