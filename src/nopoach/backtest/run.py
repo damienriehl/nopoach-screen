@@ -120,6 +120,7 @@ class CaseResult:
     input_sources: tuple[InputSource, ...]
     input_disclosure_note: str
     synthetic_input_notice: str | None
+    execution: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -266,6 +267,7 @@ def run_backtest(
                 SYNTHETIC_INPUT_NOTICE
                 if any(source.synthetic for source in input_sources)
                 else None,
+                screen.execution,
             )
         )
     # Workspace.open already enforces an out-of-repository root. Resolve the

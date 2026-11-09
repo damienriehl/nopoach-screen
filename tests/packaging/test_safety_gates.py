@@ -91,6 +91,21 @@ def test_history_rejects_archived_data_without_denylist(
     run(archive_bytes(kind, name, b"clean"))
 
 
+@pytest.mark.parametrize("archived", [False, True])
+def test_history_rejects_validation_packet_tree_and_archive(
+    history_scan, monkeypatch, archived
+):
+    _, _, run = history_scan
+    monkeypatch.delenv("NOPOACH_DENYLIST_PATH", raising=False)
+    if archived:
+        run(
+            archive_bytes("zip", "exports/validation/invented/manifest.json", b"{}"),
+            "packet.zip",
+        )
+    else:
+        run(b"{}", "exports/validation/invented/manifest.json")
+
+
 @pytest.mark.parametrize("prohibited_data", [False, True])
 def test_history_inspects_local_lfs_content_without_denylist(
     history_scan, monkeypatch, prohibited_data
