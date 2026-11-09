@@ -25,7 +25,9 @@ real-person histories, agency identity, or credentials are included.
 | DOL OFLC LCA and PERM | Public bulk disclosure files; https://www.dol.gov/general/aboutdol/copyright. LCA job offers and PERM records are occupation/employer context, not a complete employment history. |
 | Franchise disclosure documents | Agency-supplied lawful imports; rights and terms depend on the originating filing repository. No universal redistribution license asserted. |
 | Agency CSV/Parquet, UI wage records, investigative productions | Agency authority, data-sharing agreements and source-specific restrictions govern; these are never distributed with the code. |
+| Public Census LEHD J2JOD aggregates | Local CSV/gzip import only, using declared release and pair availability under [schema V4.14.0](https://lehd.ces.census.gov/data/schema/j2j_latest/lehd_public_use_schema.html). Retains dimensions and status flags; compares complete annual temporal patterns only. No automatic download, restricted microdata access or employer-pair calibration is implemented. |
 | Census LEHD restricted microdata | Title 13 and approved research terms; method validation only, never employer-identifying enforcement leads. Catalog reference only. |
+| Individual employment-contract review corpus | Agency-supplied lawful UTF-8 CSV with source, scope, review population and explicit review decisions. Rights and authority depend on the source. Original and normalized text remain in the external workspace; no real contracts are distributed with the code. |
 | LinkedIn Talent Insights / Economic Graph | First-party licensed aggregate products; verify original-source terms. No profile scraping, account-based collector or access purchase is implemented. Catalog reference only. |
 | Revelio Labs, Coresignal, People Data Labs, Live Data Technologies, Lightcast, Bright Data, Aura | Commercial provider terms and original collection rights require review; provenance can be unclear or possibly unlawful. Listing is not permission, a verified price, or a redistribution license. Catalog references only. |
 | Equifax The Work Number | Employment-verification / FCRA permissible-purpose restrictions; not recommended or used for enforcement lead generation. Catalog reference only. |
@@ -35,6 +37,28 @@ real-person histories, agency identity, or credentials are included.
 The catalog is a dated, unverified terms/cost snapshot. New collection requires
 review of the actual host's current terms. No spending, login, account use or
 terms workaround is authorized. Drop a source if its terms prohibit the use.
+
+## Analytical method references
+
+The flow-group proposal is a local implementation of a directed
+degree-corrected Poisson block model using existing NumPy/SciPy dependencies.
+[Nimczik's manuscript](https://www.econstor.eu/bitstream/10419/168147/1/VfS-2017-pid-2742.pdf)
+motivates the labor-flow model;
+[Karrer and Newman](https://arxiv.org/html/1008.3926v1) motivate degree correction.
+These are methodological references, not a claim to reproduce a published
+empirical result or validate the selected competitor groups.
+
+The public J2J importer follows the Census
+[indicator definitions](https://lehd.ces.census.gov/data/schema/j2j_latest/variables_j2jod.csv),
+[identifiers](https://lehd.ces.census.gov/data/schema/j2j_latest/lehd_identifiers_j2jod.csv)
+and [status flags](https://lehd.ces.census.gov/data/schema/j2j_latest/label_flags.csv).
+These links use Census's moving `j2j_latest` alias; the parser accepts only the
+explicitly supported V4.14.0 schema, records its own version/settings and makes
+no runtime request to those links. Read the
+[technical documentation](https://lehd.ces.census.gov/doc/jobtojob_documentation_long.pdf)
+and [release notices](https://lehd.ces.census.gov/doc/J2J_data_notices.pdf) when
+reviewing a supplied release. The implemented scope, complete-year rules and
+limits are recorded in [the method](docs/method.md#public-census-j2j-temporal-context).
 
 ## Vendored resources and distribution tools
 

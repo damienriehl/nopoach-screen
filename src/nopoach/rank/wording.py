@@ -61,10 +61,24 @@ OCCUPATIONS_UNAVAILABLE = (
     "mismatch is not testable."
 )
 NON_COMPETE_UNAVAILABLE = (
-    "Non-compete prevalence is not testable in version 1: "
-    "no non-compete extractor is built."
+    "Non-compete prevalence is not testable: "
+    "no non-compete extractor evidence was supplied."
 )
 RATE_UNAVAILABLE = "unavailable"
+ANALYTICAL_HEADINGS = {
+    "cluster": "Flow market proposal and selection",
+    "public": "Public mobility context",
+    "contracts": "Contract review context",
+}
+PUBLIC_CONTEXT_COLUMNS = (
+    "Year",
+    "Public total",
+    "Modeled total",
+    "Public share",
+    "Modeled share",
+    "Difference (percentage points)",
+)
+PUBLIC_CONTEXT_STATUS = {"context_only": "Context only", "unavailable": "Unavailable"}
 
 
 def pair_summary(
@@ -321,4 +335,12 @@ def source_entry(
         f"Source: {source}. Provenance class: {provenance_class}. Collection method: "
         f"{collection_method}. Collected at: {collected_at}. Location: {url}. "
         f"Content SHA256: {digest}. Citation: provenance:{receipt_id}."
+    )
+
+
+def noncompete_reason(populations: Sequence[str], threshold: float) -> str:
+    return (
+        f"The descriptive criterion is at least {threshold:.0%} applicable positive "
+        "reviews in either complete declared population. It fails only when both "
+        "complete populations fall below that criterion. " + " ".join(populations)
     )

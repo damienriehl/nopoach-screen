@@ -12,7 +12,7 @@
 <header><a href="/">Labor market screen</a><nav aria-label="Main"><a href="/market">Define market</a><a href="/screen">Ranked screen</a>{% if session.folder %}<a href="/imports">Import data</a>{% endif %}</nav></header>
 <main id="content">
 {% if market %}
-<div class="case-caption" aria-label="Market caption"><div class="market-name">{{ market.occupation_codes|sort|join(', ') }}<br>{{ market.geography.code }} {{ market.geography.kind }}</div><div aria-hidden="true" class="section-rule">§<br>§<br>§</div><div>Screen of {{ market.employer_ids|length if market.employer_ids is not none else session.employers|length }} employers<br>{{ market.start_year }}–{{ market.end_year }}<br>Coverage: {{ 'partial' if result and result.partial_screen else 'awaiting screen' if not result else 'sufficient' }}</div></div>
+<div class="case-caption" aria-label="Market caption"><div class="market-name">{% if market.population_id is defined %}Flow-defined population<br>{{ market.population_description }}{% else %}{{ market.occupation_codes|sort|join(', ') }}<br>{{ market.geography.code }} {{ market.geography.kind }}{% endif %}</div><div aria-hidden="true" class="section-rule">§<br>§<br>§</div><div>Screen of {{ market.employer_ids|length if market.employer_ids is not none else session.employers|length }} employers<br>{{ market.start_year }}–{{ market.end_year }}<br>Coverage: {{ 'partial' if result and result.partial_screen else 'awaiting screen' if not result else 'sufficient' }}</div></div>
 {% endif %}
 <h1>{{ title }}</h1>
 {% if error %}<div role="alert" class="caution">{{ error }}</div>{% endif %}

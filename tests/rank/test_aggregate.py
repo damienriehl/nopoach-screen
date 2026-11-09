@@ -228,3 +228,37 @@ def test_ae1_real_flow_pipeline_ranks_planted_pair_first_with_explanations(seed)
         )
         assert 30 <= direction.break_result.before_observed_rate <= 50
         assert direction.break_result.after_observed_rate < 5
+
+
+def test_individual_review_changes_explanation_without_creating_a_signal_or_rank():
+    from nopoach.signals.noncompetes import EmployerPrevalence
+
+    employers = [Employer("a", "Synthetic A"), Employer("b", "Synthetic B")]
+    original = rank_pairs(employers)
+    reviewed = EmployerPrevalence(
+        "a",
+        "Synthetic population",
+        "Complete synthetic review",
+        "synthetic",
+        6,
+        10,
+        10,
+        0,
+        True,
+        True,
+        "6/10 reviewed; synthetic scope only",
+        (),
+        ("source",),
+    )
+    changed = rank_pairs(
+        employers,
+        explanation_data={
+            "a": EmployerExplanationData(noncompete_prevalence=reviewed),
+        },
+    )
+    before, after = original.mutual[0], changed.mutual[0]
+    assert before.score == after.score == 0
+    assert before.signals == after.signals
+    assert before.clauses == after.clauses is None
+    assert before.fired_signals == after.fired_signals == ()
+    assert after.explanations[-1].status == "passed"

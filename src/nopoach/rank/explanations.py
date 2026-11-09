@@ -11,7 +11,8 @@ not latitude/longitude. Occupation shares are comparable normalized fractions.
 External hire rates describe ALL incoming external hires, not just this pair.
 LCA records have no year; the caller must select the appropriate bulk files.
 No coordinates, occupation shares or external hire rates are inferred from LCA
-worker-position counts or missing pair flows. Non-competes are always untested.
+worker-position counts or missing pair flows. Individual restrictions require
+a complete scoped review population before prevalence is testable.
 """
 
 from collections import defaultdict
@@ -21,8 +22,9 @@ from math import dist
 from statistics import median
 
 from nopoach.collect.dol import DolRecord
-from nopoach.market.define import soc_code
+from nopoach.market.define import geodesic_km, soc_code
 from nopoach.rank import wording
+from nopoach.signals.noncompetes import THRESHOLD, EmployerPrevalence
 
 GEOGRAPHIC_SEPARATION_KM = 250.0
 PAY_GAP_THRESHOLD = 0.25
@@ -37,6 +39,8 @@ class EmployerExplanationData:
     occupation_shares: Mapping[str, float] | None = None
     external_hire_rate: float | None = None
     provenance_ids: tuple[str, ...] = ()
+    noncompete_prevalence: EmployerPrevalence | None = None
+    worksites_latlon: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,48 @@ def _status(supported: bool) -> wording.ExplanationStatus:
     return "passed" if supported else "failed"
 
 
+def _noncompetes(
+    employer_a_id: str,
+    employer_b_id: str,
+    left: EmployerPrevalence | None,
+    right: EmployerPrevalence | None,
+) -> ExplanationCheck:
+    if left is None and right is None:
+        return ExplanationCheck(
+            "non_compete_prevalence", "not_testable", wording.NON_COMPETE_UNAVAILABLE
+        )
+    populations = (("a", employer_a_id, left), ("b", employer_b_id, right))
+    supported: list[bool | None] = []
+    measurements: dict[str, float] = {"threshold": THRESHOLD}
+    reasons = []
+    sources: set[str] = set()
+    for side, employer, population in populations:
+        if population is None or population.employer_id != employer:
+            supported.append(None)
+            reasons.append(f"{employer}: no matching reviewed population was supplied.")
+            continue
+        supported.append(population.supported if population.complete else None)
+        measurements[f"{side}_numerator"] = float(population.numerator)
+        if population.denominator is not None:
+            measurements[f"{side}_denominator"] = float(population.denominator)
+        reasons.append(f"{employer}: {population.reason}")
+        sources.update(population.provenance_ids)
+    status: wording.ExplanationStatus = (
+        "passed"
+        if True in supported
+        else "failed"
+        if supported == [False, False]
+        else "not_testable"
+    )
+    return ExplanationCheck(
+        "non_compete_prevalence",
+        status,
+        wording.noncompete_reason(reasons, THRESHOLD),
+        measurements,
+        tuple(sorted(sources)),
+    )
+
+
 def check_explanations(
     employer_a_id: str,
     employer_b_id: str,
@@ -101,10 +147,18 @@ def check_explanations(
     geography = ExplanationCheck(
         "geographic_separation", "not_testable", wording.GEOGRAPHY_UNAVAILABLE
     )
-    if left.worksites_km and right.worksites_km:
+    distance = None
+    if left.worksites_latlon and right.worksites_latlon:
+        distance = min(
+            geodesic_km(a, b)
+            for a in left.worksites_latlon
+            for b in right.worksites_latlon
+        )
+    elif left.worksites_km and right.worksites_km:
         distance = min(
             dist(a, b) for a in left.worksites_km for b in right.worksites_km
         )
+    if distance is not None:
         geography = ExplanationCheck(
             "geographic_separation",
             _status(distance >= GEOGRAPHIC_SEPARATION_KM),
@@ -173,7 +227,10 @@ def check_explanations(
         {**rates, "threshold": LOW_EXTERNAL_HIRE_RATE},
         sources,
     )
-    non_competes = ExplanationCheck(
-        "non_compete_prevalence", "not_testable", wording.NON_COMPETE_UNAVAILABLE
+    non_competes = _noncompetes(
+        employer_a_id,
+        employer_b_id,
+        left.noncompete_prevalence,
+        right.noncompete_prevalence,
     )
     return geography, pay, occupations, lateral, non_competes

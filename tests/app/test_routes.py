@@ -910,3 +910,613 @@ def test_changed_market_does_not_display_previous_market_results(client, tmp_pat
     assert client.app.state.session.result is None
     assert "Synthetic scoring failure" in response.text
     assert "Synthetic A / Synthetic B" not in response.text
+
+
+def analytical_workspace(client, tmp_path):
+    import runpy
+    from pathlib import Path
+
+    helper = runpy.run_path(
+        str(Path(__file__).parents[1] / "test_pipeline_analytical.py")
+    )
+    client.headers["origin"] = "http://127.0.0.1:8765"
+    root = tmp_path / "analytical"
+    with Workspace.open(root) as workspace:
+        market, population = helper["load_analytical_fixture"](workspace)
+        public = helper["public_input"](workspace)
+        contracts = helper["contracts_input"](workspace, market)
+    response = client.post("/workspace", data={"folder": str(root)})
+    assert response.status_code == 200
+    return root, market, population, public, contracts
+
+
+def test_retained_analytical_versions_and_flow_confirmation(client, tmp_path):
+    from nopoach.market.define import FlowDefinedMarket
+
+    _, _, population, public, _ = analytical_workspace(client, tmp_path)
+    response = client.get("/imports")
+    assert population.bundle_id in response.text and public.bundle_id in response.text
+    response = client.post(
+        "/imports/analytical/select",
+        data={
+            "kind": "flow_population",
+            "bundle_id": population.bundle_id,
+        },
+    )
+    assert response.status_code == 200
+    response = client.post(
+        "/market/flow/propose",
+        data={
+            "start_year": "2020",
+            "end_year": "2021",
+            "pre_start_year": "2015",
+            "pre_end_year": "2019",
+            "groups": "2",
+        },
+    )
+    assert response.status_code == 200
+    wait_screen(client)
+    session = client.app.state.session
+    assert isinstance(session.market, FlowDefinedMarket)
+    assert session.cluster_proposal.status == "fitted"
+    assert session.result is None
+    response = client.get("/market?mode=flow")
+    assert "Confirm group and run" in response.text
+    response = client.post(
+        "/market/flow/confirm",
+        data={
+            "group": "0",
+            "add": "d",
+            "proposal_digest": session.cluster_proposal.digest,
+        },
+    )
+    assert response.status_code == 200
+    response = wait_screen(client)
+    assert session.result is not None
+    assert "Flow-based competitor review" in response.text
+    assert "Cross-boundary pairs not evaluated" in response.text
+    assert session.result.analytical.cluster_selection.added_employer_ids == ("d",)
+
+
+def test_optional_selection_invalidates_result_and_invalid_upload_preserves_version(
+    client, tmp_path
+):
+    _, market, _, public, contracts = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    for reference in (public, contracts):
+        response = client.post(
+            "/imports/analytical/select",
+            data={
+                "kind": reference.kind,
+                "bundle_id": reference.bundle_id,
+            },
+        )
+        assert response.status_code == 200
+    session.start()
+    response = wait_screen(client)
+    assert "Public mobility context" in response.text
+    assert "Reviewed individual restrictions" in response.text
+    assert "private-worker-key" not in response.text
+    selected = session.analytical_inputs
+    response = client.post(
+        "/imports/analytical/j2j",
+        data={"source": "Invalid"},
+        files={"file": ("bad.csv", b"bad")},
+    )
+    assert response.status_code == 400
+    assert session.analytical_inputs == selected
+    assert session.result is not None
+    response = client.post(
+        "/imports/analytical/select",
+        data={
+            "kind": "j2j",
+            "bundle_id": "",
+        },
+    )
+    assert response.status_code == 200
+    assert session.result is None
+
+
+def test_analytical_jobs_freeze_inputs_and_ordinary_ignores_flow_population(
+    client, tmp_path
+):
+    from nopoach.analytical_inputs import AnalyticalInputs, ClusterSettings
+
+    _, market, population, public, _ = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    session.analytical_inputs = AnalyticalInputs(
+        j2j=public,
+        flow_population=population,
+        cluster_settings=ClusterSettings(2015, 2019),
+    )
+    with patch.object(session.executor, "submit") as submit:
+        session.start()
+    args = submit.call_args.args
+    assert args[2] is market
+    assert args[-2] == AnalyticalInputs(j2j=public)
+    assert args[-1] is None
+    session.analytical_inputs = AnalyticalInputs()
+    assert args[-2].j2j == public
+    response = client.post(
+        "/imports/analytical/select", data={"kind": "j2j", "bundle_id": ""}
+    )
+    assert response.status_code == 409
+    session.status = "Defined"
+
+
+def test_analytical_upload_rechecks_idle_and_rejects_unknown_contract_employer(
+    client, tmp_path
+):
+    import runpy
+    from pathlib import Path
+
+    from starlette.datastructures import UploadFile
+
+    _, market, _, _, contracts = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    client.post(
+        "/imports/analytical/select",
+        data={"kind": "contracts", "bundle_id": contracts.bundle_id},
+    )
+    selected = session.analytical_inputs
+    helper = runpy.run_path(
+        str(Path(__file__).parents[1] / "imports/test_noncompetes.py")
+    )
+    row = helper["row"]()
+    row["employer_id"] = "unknown-employer-typo"
+    response = client.post(
+        "/imports/analytical/contracts",
+        data={
+            "source": "Synthetic invalid",
+            "scope": "ordinary:synthetic",
+            "population_description": "Synthetic",
+            "sampling_basis": "Synthetic complete",
+        },
+        files={"file": ("contracts.csv", helper["body"]([row]))},
+    )
+    assert response.status_code == 400
+    assert "must belong to this workspace" in response.text
+    assert session.analytical_inputs == selected
+    original = UploadFile.read
+
+    async def start_during_read(upload, *args, **kwargs):
+        body = await original(upload, *args, **kwargs)
+        session.status = "Collecting"
+        return body
+
+    with patch.object(UploadFile, "read", start_during_read):
+        response = client.post(
+            "/imports/analytical/j2j", files={"file": ("bad.csv", b"bad")}
+        )
+    assert response.status_code == 409
+    assert session.analytical_inputs == selected
+    session.status = "Defined"
+
+
+def test_failed_rerun_labels_prior_snapshot_and_exports_it(client, tmp_path):
+    import io
+
+    from docx import Document
+
+    _, market, _, public, contracts = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    for ref in (public, contracts):
+        client.post(
+            "/imports/analytical/select",
+            data={"kind": ref.kind, "bundle_id": ref.bundle_id},
+        )
+    session.start()
+    wait_screen(client)
+    prior = session.result
+    with patch(
+        "nopoach.app.routes.pages.run_screen",
+        side_effect=ValueError("Synthetic rerun failed"),
+    ):
+        session.start()
+        response = wait_screen(client)
+    assert session.result is prior
+    assert "Prior screen." in response.text
+    pair = prior.unreliable[0].pair
+    response = client.get(f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}")
+    assert "Prior screen." in response.text
+    response = client.get(f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}/export")
+    assert response.status_code == 200
+    text = "\n".join(p.text for p in Document(io.BytesIO(response.content)).paragraphs)
+    assert public.bundle_id in text and contracts.bundle_id in text
+
+
+def test_corrupt_optional_input_keeps_import_controls_and_prior_export_usable(
+    client, tmp_path
+):
+    root, market, _, _, contracts = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    client.post(
+        "/imports/analytical/select",
+        data={"kind": "contracts", "bundle_id": contracts.bundle_id},
+    )
+    session.start()
+    wait_screen(client)
+    prior = session.result
+    raw = root / "analysis" / "inputs" / contracts.bundle_id / "raw.bin"
+    backup = raw.read_bytes()
+    try:
+        raw.write_bytes(b"synthetic integrity regression")
+        response = client.get("/imports")
+        assert response.status_code == 200
+        assert "integrity check failed" in response.text
+        assert "Use individual contracts version" in response.text
+        session.start()
+        response = wait_screen(client)
+        assert "Prior screen." in response.text
+        assert session.result is prior
+        pair = prior.unreliable[0].pair
+        response = client.get(
+            f"/pairs/{pair.employer_a_id}/{pair.employer_b_id}/export"
+        )
+        assert response.status_code == 200
+        response = client.post(
+            "/imports/analytical/select", data={"kind": "contracts", "bundle_id": ""}
+        )
+        assert response.status_code == 200
+        assert session.analytical_inputs.contracts is None
+    finally:
+        raw.write_bytes(backup)
+
+
+def test_retry_and_partial_acceptance_keep_selected_analytical_versions(
+    client, tmp_path
+):
+    from nopoach.pipeline import run_screen
+
+    _, market, _, public, contracts = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    for ref in (public, contracts):
+        client.post(
+            "/imports/analytical/select",
+            data={"kind": ref.kind, "bundle_id": ref.bundle_id},
+        )
+    selection = session.active_inputs()
+    with patch(
+        "nopoach.app.routes.pages.run_screen",
+        side_effect=ValueError("Synthetic failure"),
+    ):
+        session.start()
+        wait_screen(client)
+    with patch("nopoach.app.routes.pages.run_screen", wraps=run_screen) as scoring:
+        response = client.post("/screen/retry", data={"source": "Screen scoring"})
+        assert response.status_code == 200
+        wait_screen(client)
+        assert scoring.call_args.kwargs["analytical_inputs"] == selection
+        assert session.status == "Insufficient"
+        response = client.post("/screen/accept", data={"confirm": "yes"})
+        assert response.status_code == 200
+        wait_screen(client)
+        assert scoring.call_args.kwargs["analytical_inputs"] == selection
+        assert scoring.call_args.kwargs["accept_partial"] is True
+        assert session.result.analytical.inputs == selection
+        assert session.result.accept_partial
+
+
+@pytest.mark.parametrize(
+    "mutation", ["history", "parent", "market", "workspace", "population"]
+)
+def test_changed_dependencies_invalidate_flow_proposal(client, tmp_path, mutation):
+    root, _, population, public, _ = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    client.post(
+        "/imports/analytical/select",
+        data={"kind": "flow_population", "bundle_id": population.bundle_id},
+    )
+    client.post(
+        "/market/flow/propose",
+        data={
+            "start_year": "2020",
+            "end_year": "2021",
+            "pre_start_year": "2015",
+            "pre_end_year": "2019",
+            "groups": "2",
+        },
+    )
+    wait_screen(client)
+    proposal = session.cluster_proposal
+    market = session.market
+    assert proposal.status == "fitted"
+    client.post(
+        "/imports/analytical/select",
+        data={"kind": "j2j", "bundle_id": public.bundle_id},
+    )
+    assert session.cluster_proposal is proposal
+    if mutation == "history":
+        preview = preview_worker(client, "synthetic-additional")
+        response = client.post(
+            "/imports",
+            data={
+                "upload_id": preview_id(preview),
+                "source": "Synthetic added history",
+                "provenance_class": "synthetic",
+                "map_person_key": "worker",
+            },
+        )
+    elif mutation == "parent":
+        response = client.post(
+            "/imports/parent",
+            data={
+                "employer_id": "a",
+                "parent_id": "b",
+                "valid_from": "2020-01-01",
+                "reason": "Synthetic reviewed override",
+            },
+        )
+    elif mutation == "workspace":
+        response = client.post("/workspace", data={"folder": str(root)})
+    elif mutation == "population":
+        response = client.post(
+            "/imports/analytical/select",
+            data={"kind": "flow_population", "bundle_id": population.bundle_id},
+        )
+    else:
+        response = client.post(
+            "/market",
+            data={
+                "occupations": "29-1141",
+                "geography_kind": "metro",
+                "geography_code": "00123",
+                "start_year": "2020",
+                "end_year": "2021",
+                "action": "propose",
+            },
+        )
+    assert response.status_code == 200
+    assert session.cluster_proposal is None
+    assert session.result is None
+    if mutation in {"history", "parent", "population"}:
+        assert session.market == market
+        assert client.post("/screen/run").status_code == 409
+
+
+def test_collector_failure_with_new_result_does_not_label_it_prior(client, tmp_path):
+    _, market, _, _, _ = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+
+    def failed_collector(workspace, market):
+        raise ValueError("Synthetic unavailable collector")
+
+    session.collectors = {"Synthetic collector": failed_collector}
+    session.start()
+    response = wait_screen(client)
+    assert session.result is not None
+    assert session.status == "Failed"
+    assert not session.prior_result
+    assert "Prior screen." not in response.text
+    assert "Synthetic unavailable collector" in response.text
+
+
+def request_flow_review(client, population, groups=2):
+    assert (
+        client.post(
+            "/imports/analytical/select",
+            data={"kind": "flow_population", "bundle_id": population.bundle_id},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/market/flow/propose",
+            data={
+                "start_year": "2020",
+                "end_year": "2021",
+                "pre_start_year": "2015",
+                "pre_end_year": "2019",
+                "groups": str(groups),
+            },
+        ).status_code
+        == 200
+    )
+    wait_screen(client)
+    proposal = client.app.state.session.cluster_proposal
+    assert proposal.status == "fitted"
+    return proposal
+
+
+def test_corrupt_old_version_does_not_hide_or_block_healthy_selections(
+    client, tmp_path
+):
+    from nopoach.analytical_inputs import read_bundle
+    from nopoach.imports.noncompetes import import_contracts
+
+    root, market, _, public, damaged = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    with Workspace.open(root) as workspace:
+        original = read_bundle(workspace, damaged)
+        healthy = import_contracts(
+            workspace,
+            original.body,
+            {**original.metadata, "source": "Synthetic replacement review"},
+        )
+        path = workspace.root / "analysis" / "inputs" / damaged.bundle_id / "raw.bin"
+        path.write_bytes(original.body + b"damaged")
+    response = client.get("/imports")
+    assert response.status_code == 200
+    assert "integrity" in response.text
+    assert healthy.bundle_id in response.text and public.bundle_id in response.text
+    for kind, ref in (("j2j", public), ("contracts", healthy)):
+        response = client.post(
+            "/imports/analytical/select",
+            data={"kind": kind, "bundle_id": ref.bundle_id},
+        )
+        assert response.status_code == 200
+        assert getattr(session.analytical_inputs, kind) == ref
+    response = client.post(
+        "/imports/analytical/select",
+        data={"kind": "contracts", "bundle_id": damaged.bundle_id},
+    )
+    assert response.status_code == 400
+    assert session.analytical_inputs.contracts == healthy
+
+
+def test_old_or_missing_proposal_identity_cannot_confirm_replacement(client, tmp_path):
+    from lxml import html
+
+    _, _, population, _, _ = analytical_workspace(client, tmp_path)
+    old = request_flow_review(client, population)
+    current = request_flow_review(client, population, groups=1)
+    assert old.digest != current.digest and old.groups[0] != current.groups[0]
+    session = client.app.state.session
+    market = session.market
+    with patch.object(session, "start") as start:
+        for posted in ({}, {"proposal_digest": old.digest}):
+            response = client.post(
+                "/market/flow/confirm", data={"group": "0", **posted}
+            )
+            assert response.status_code == 400
+            assert "proposal" in response.text.lower()
+            assert session.market is market
+            assert session.cluster_proposal is current
+            start.assert_not_called()
+    tree = html.fromstring(client.get("/market?mode=flow").text)
+    assert tree.xpath(
+        "//form[@action='/market/flow/confirm']/input[@name='proposal_digest']/@value"
+    ) == [current.digest]
+
+
+def test_invalid_ordinary_form_preserves_requested_mode_after_flow_review(
+    client, tmp_path
+):
+    _, _, population, _, _ = analytical_workspace(client, tmp_path)
+    request_flow_review(client, population)
+    session = client.app.state.session
+    previous = session.market
+    assert 'id="occupations"' in client.get("/market?mode=ordinary").text
+    response = client.post(
+        "/market",
+        data={
+            "occupations": "not-a-soc",
+            "geography_kind": "metro",
+            "geography_code": "00123",
+            "start_year": "2020",
+            "end_year": "2021",
+            "action": "propose",
+        },
+    )
+    assert response.status_code == 400
+    assert 'id="occupations"' in response.text
+    assert 'action="/market/flow/propose"' not in response.text
+    assert session.market is previous
+
+
+def test_confirmed_second_group_survives_reopening_and_resubmission(client, tmp_path):
+    from lxml import html
+
+    _, _, population, _, _ = analytical_workspace(client, tmp_path)
+    proposal = request_flow_review(client, population)
+    session = client.app.state.session
+    with patch.object(session, "start"):
+        response = client.post(
+            "/market/flow/confirm",
+            data={"group": "1", "proposal_digest": proposal.digest, "add": "a"},
+        )
+        assert response.status_code == 200
+        previous = session.market
+        tree = html.fromstring(client.get("/market?mode=flow").text)
+        selected = tree.xpath("//select[@name='group']/option[@selected]/@value")
+        assert selected == ["1"]
+        response = client.post(
+            "/market/flow/confirm",
+            data={
+                "group": selected[0],
+                "proposal_digest": proposal.digest,
+                "add": "a",
+            },
+        )
+        assert response.status_code == 200
+        assert session.market == previous
+        assert session.market.fitted_employer_ids == frozenset(proposal.groups[1])
+
+
+def test_concurrent_run_and_import_cannot_replace_a_running_jobs_inputs():
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import nullcontext
+    from pathlib import Path
+    from threading import Event
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse
+
+    from nopoach.analytical_inputs import BundleRef
+    from nopoach.app.routes import pages
+
+    entered, parsing, release_run, submitted = (Event() for _ in range(4))
+    queued = []
+
+    class Queue:
+        def submit(self, *args):
+            queued.append(args)
+            submitted.set()
+
+    session = pages.Session(
+        folder=Path("synthetic-unused-workspace"),
+        market=Market(frozenset({"29-1141"}), Geography("metro", "00123"), 2020, 2021),
+        executor=Queue(),
+        status="Defined",
+    )
+    app = FastAPI()
+    app.include_router(pages.router)
+    app.state.session = session
+    original_state = pages.state
+    ref = BundleRef("j2j", "a" * 64, "b" * 64)
+
+    def delayed_state(request):
+        if request.url.path == "/screen/run":
+            entered.set()
+            assert release_run.wait(10)
+        return original_state(request)
+
+    def imported(*args):
+        parsing.set()
+        release_run.set()
+        assert submitted.wait(10)
+        return ref
+
+    data = {"start_year": "2020", "end_year": "2021"}
+    data.update(start_quarter="1", end_quarter="4")
+    with (
+        patch.object(pages, "state", side_effect=delayed_state),
+        patch.object(
+            pages.Workspace, "open", return_value=nullcontext(SimpleNamespace())
+        ),
+        patch.object(pages, "import_j2j", side_effect=imported),
+        patch.object(pages, "page", return_value=HTMLResponse("ok")),
+        patch.object(pages, "import_page", return_value=HTMLResponse("ok")),
+        TestClient(app) as client,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        running = pool.submit(client.post, "/screen/run")
+        try:
+            assert entered.wait(5)
+            importing = pool.submit(
+                client.post,
+                "/imports/analytical/j2j",
+                data=data,
+                files={"file": ("synthetic.csv", b"synthetic", "text/csv")},
+            )
+            # A synchronous run handler lets publication enter this window;
+            # an event-loop handler keeps the import queued until submission.
+            parsing.wait(5)
+        finally:
+            release_run.set()
+        run_response = running.result(10)
+        import_response = importing.result(10)
+    assert run_response.status_code == 200
+    assert import_response.status_code == 409
+    assert len(queued) == 1 and queued[0][5] is None
+    assert session.analytical_inputs.j2j is None
+    assert session.status == "Collecting"

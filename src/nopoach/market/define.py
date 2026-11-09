@@ -9,7 +9,8 @@ import json
 import re
 from collections.abc import Iterable, Set
 from dataclasses import dataclass, replace
-from math import isfinite
+from hashlib import sha256
+from math import asin, cos, isfinite, radians, sin, sqrt
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -32,6 +33,20 @@ class Geography:
         if self.kind not in {"state", "metro"} or not self.code.strip():
             raise ValueError("Geography requires a state or metro and a code")
         object.__setattr__(self, "code", self.code.strip().upper())
+
+
+def geodesic_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle distance for supplied latitude/longitude coordinates."""
+    if any(not isfinite(v) for v in (*a, *b)) or any(
+        abs(p[0]) > 90 or abs(p[1]) > 180 for p in (a, b)
+    ):
+        raise ValueError("Invalid latitude/longitude coordinates")
+    lat1, lat2 = radians(a[0]), radians(b[0])
+    value = (
+        sin((lat2 - lat1) / 2) ** 2
+        + cos(lat1) * cos(lat2) * sin(radians(b[1] - a[1]) / 2) ** 2
+    )
+    return 6371 * 2 * asin(sqrt(min(1.0, max(0.0, value))))
 
 
 @dataclass(frozen=True)
@@ -102,6 +117,139 @@ class Market:
             frozenset(data["added_employer_ids"]),
             frozenset(data["removed_employer_ids"]),
         )
+
+
+@dataclass(frozen=True)
+class FlowDefinedMarket:
+    """Independent record population with a separately confirmed employer group."""
+
+    start_year: int
+    end_year: int
+    population_id: str
+    population_description: str
+    source_provenance_ids: frozenset[str]
+    candidate_employer_ids: frozenset[str]
+    employer_ids: frozenset[str]
+    cluster_digest: str = ""
+    fitted_employer_ids: frozenset[str] = frozenset()
+    added_employer_ids: frozenset[str] = frozenset()
+    removed_employer_ids: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if (
+            not 1 <= self.start_year <= self.end_year <= 9999
+            or not self.population_id.strip()
+            or not self.population_description.strip()
+            or not self.source_provenance_ids
+            or not self.candidate_employer_ids
+            or not self.employer_ids <= self.candidate_employer_ids
+            or not self.fitted_employer_ids <= self.candidate_employer_ids
+            or not self.added_employer_ids <= self.candidate_employer_ids
+            or not self.removed_employer_ids <= self.candidate_employer_ids
+        ):
+            raise ValueError(
+                "Flow market requires an explicit population and member set"
+            )
+
+    def edit_employers(
+        self, *, add: Set[str] = frozenset(), remove: Set[str] = frozenset()
+    ) -> "FlowDefinedMarket":
+        return replace(
+            self,
+            employer_ids=frozenset((self.employer_ids | add) - remove),
+            added_employer_ids=frozenset((self.added_employer_ids | add) - remove),
+            removed_employer_ids=frozenset((self.removed_employer_ids - add) | remove),
+        )
+
+    def to_json(self) -> str:
+        from dataclasses import asdict
+
+        data = asdict(self)
+        return json.dumps(
+            {
+                "version": 1,
+                "kind": "flow_defined",
+                **{
+                    k: sorted(v) if isinstance(v, frozenset) else v
+                    for k, v in data.items()
+                },
+            },
+            sort_keys=True,
+        )
+
+    @classmethod
+    def from_json(cls, value: str) -> "FlowDefinedMarket":
+        data = json.loads(value)
+        if data.pop("version", None) != 1 or data.pop("kind", None) != "flow_defined":
+            raise ValueError("Unsupported flow market definition")
+        for key in (
+            "source_provenance_ids",
+            "candidate_employer_ids",
+            "employer_ids",
+            "fitted_employer_ids",
+            "added_employer_ids",
+            "removed_employer_ids",
+        ):
+            data[key] = frozenset(data.get(key, ()))
+        return cls(**data)
+
+
+MarketDefinition = Market | FlowDefinedMarket
+
+
+def market_from_json(value: str) -> MarketDefinition:
+    if json.loads(value).get("kind") == "flow_defined":
+        return FlowDefinedMarket.from_json(value)
+    return Market.from_json(value)
+
+
+def scope_contains(
+    market: MarketDefinition,
+    employer_id: str,
+    occupation_code: str,
+    geography: Geography | None,
+    provenance_id: str = "",
+) -> bool:
+    if employer_id in market.removed_employer_ids or (
+        market.employer_ids is not None and employer_id not in market.employer_ids
+    ):
+        return False
+    if isinstance(market, FlowDefinedMarket):
+        return provenance_id in market.source_provenance_ids
+    return bool(occupation_code) and (
+        soc_code(occupation_code) in market.occupation_codes
+        and geography == market.geography
+    )
+
+
+def scope_description(market: MarketDefinition) -> str:
+    if isinstance(market, FlowDefinedMarket):
+        return (
+            f"Flow-defined population: {market.population_description} "
+            f"({market.population_id}); all supplied occupations and geographies; "
+            f"{market.start_year}–{market.end_year}."
+        )
+    return (
+        f"Occupations {', '.join(sorted(market.occupation_codes))}; "
+        f"{market.geography.kind} {market.geography.code}; "
+        f"{market.start_year}–{market.end_year}."
+    )
+
+
+def scope_key(market: MarketDefinition) -> str:
+    """Stable population scope, separate from period and confirmed member choices."""
+    if isinstance(market, FlowDefinedMarket):
+        population = json.dumps(
+            [
+                sorted(market.source_provenance_ids),
+                sorted(market.candidate_employer_ids),
+            ],
+            separators=(",", ":"),
+        ).encode()
+        return f"flow:{market.population_id}:{sha256(population).hexdigest()}"
+    return f"{market.geography.kind}:{market.geography.code}:" + ",".join(
+        sorted(market.occupation_codes)
+    )
 
 
 @dataclass(frozen=True)

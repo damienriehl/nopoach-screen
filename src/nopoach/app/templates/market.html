@@ -1,4 +1,8 @@
 {% extends 'base.html' %}{% block content %}
+<nav class="tabs" aria-label="Market definition mode"><a href="/market?mode=ordinary" {% if not flow_mode %}aria-current="page"{% endif %}>Occupation and geography</a><a href="/market?mode=flow" {% if flow_mode %}aria-current="page"{% endif %}>Flow-defined population</a></nav>
+{% if flow_mode %}{% include 'flow_market.html' %}{% else %}
+{% if market and market.population_id is defined %}{% set market = none %}{% endif %}
+
 <form method="post" action="/market">
 <div class="form-grid"><div><label for="occupations">Occupation codes (SOC)</label><input id="occupations" name="occupations" required placeholder="29-1141" value="{{ market.occupation_codes|sort|join(', ') if market else '' }}"><p id="occupation-help">Separate multiple codes with commas. Use NN-NNNN.</p></div>
 <div><label for="geography_kind">Geography</label><select id="geography_kind" name="geography_kind"><option value="metro" {% if market and market.geography.kind == 'metro' %}selected{% endif %}>Metro</option><option value="state" {% if market and market.geography.kind == 'state' %}selected{% endif %}>State</option></select><label for="geography_code">State or metro code</label><input id="geography_code" name="geography_code" required value="{{ market.geography.code if market else '' }}"></div>
@@ -10,4 +14,4 @@
 <label class="check" for="employer-{{ loop.index }}"><input id="employer-{{ loop.index }}" name="employers" value="{{ id }}" type="checkbox" {% if (proposal and id in proposal.competitors|map(attribute='employer.id')|list) or (not proposal and (not market or market.employer_ids is none or id in market.employer_ids)) %}checked{% endif %}>{{ name }}</label>
 {% else %}<p>No employers are stored yet. <a href="/imports">Import data</a> to add them.</p>{% endfor %}
 </fieldset><button name="action" value="run" type="submit">Run screen</button></form>
-{% endblock %}
+{% endif %}{% endblock %}

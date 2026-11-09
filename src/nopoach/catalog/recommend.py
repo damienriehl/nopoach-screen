@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from nopoach.imports.schema import ProvenanceClass
 from nopoach.market.coverage import CoverageReport
+from nopoach.market.define import FlowDefinedMarket, scope_description
 from nopoach.market.sufficiency import SignalSufficiency
 
 CATALOG_PATH = Path(__file__).with_name("sources.yaml")
@@ -174,6 +175,8 @@ class Recommendation:
 
 
 def _occupation_fit(source: Source, report: CoverageReport) -> int:
+    if isinstance(report.market, FlowDefinedMarket):
+        return -1
     if not source.occupation_prefixes:
         return 0  # Broad coverage without a professional-profile preference.
     matches = sum(
@@ -213,12 +216,10 @@ def recommend_sources(
         )
     )
     market = report.market
-    context = (
-        f"Occupations {', '.join(sorted(market.occupation_codes))}; "
-        f"{market.geography.kind} {market.geography.code}; "
-        f"{market.start_year}-{market.end_year}. "
-        f"Coverage gap: {sufficiency.flow.reason} "
-    )
+    context = scope_description(market) + f" Coverage gap: {sufficiency.flow.reason} "
+    if isinstance(market, FlowDefinedMarket):
+        context += "Source support for this independent population is unknown. "
+
     return [
         Recommendation(
             source,

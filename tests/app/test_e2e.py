@@ -1,7 +1,8 @@
 """Host-owned Chromium/socket/axe checks: pytest -m browser tests/app/test_e2e.py.
 
-Screenshots go to pytest's temporary artifacts directory, never the repository.
-The host must inspect ranked-list.png and dossier.png for reading legibility.
+Original workflow screenshots remain temporary artifacts. The analytical workflow
+also captures four explicitly required synthetic repository evidence images.
+The host must inspect all captures for reading legibility.
 """
 
 import io
@@ -350,3 +351,239 @@ def test_failed_source_keeps_other_evidence(browser):
     assert collected == ["Synthetic other source"]
     assert app.state.session.status == "Insufficient"
     accessibility(page)
+
+
+def analytical_fixture(root):
+    helper = runpy.run_path(
+        str(Path(__file__).parents[1] / "test_pipeline_analytical.py")
+    )
+    with Workspace.open(root) as workspace:
+        market, population = helper["load_analytical_fixture"](workspace)
+    return market, population
+
+
+def import_public_context(page):
+    helper = runpy.run_path(str(Path(__file__).parents[1] / "collect/test_lehd.py"))
+    page.locator("#public-input > summary").click()
+    page.get_by_label("Public source description", exact=True).fill(
+        "Synthetic public mobility"
+    )
+    page.get_by_label("Public release label").fill("R2023Q4")
+    page.get_by_label("Release date", exact=True).fill("2023-12-31")
+    page.get_by_label("Workplace CBSA code").fill("00123")
+    page.get_by_label("I confirm the supplied CBSA", exact=False).check()
+    page.get_by_label("Public J2JOD CSV or gzip", exact=False).set_input_files(
+        {
+            "name": "synthetic-j2j.csv",
+            "mimeType": "text/csv",
+            "buffer": helper["csv_body"](helper["rows"]()),
+        }
+    )
+    page.get_by_role("button", name="Import public context", exact=True).click()
+    expect(page.get_by_label("Public J2J context version")).not_to_have_value("")
+
+
+def import_contract_review(page, scope, *, complete):
+    helper = runpy.run_path(
+        str(Path(__file__).parents[1] / "imports/test_noncompetes.py")
+    )
+    record = helper["row"]("private-browser-worker")
+    record.update(
+        scope=scope,
+        document_id="synthetic-browser-contract",
+        text=record["text"].rstrip(".") + " <script>syntheticUnsafe=1</script>.",
+    )
+    page.locator("#contract-input > summary").click()
+    page.get_by_label("Contract source description").fill(
+        "Synthetic individual contracts"
+    )
+    page.get_by_label("Reviewed population description").fill(
+        "Synthetic declared review population"
+    )
+    page.get_by_label("Sampling basis and limits").fill(
+        "Complete synthetic roster; not representative"
+    )
+    page.get_by_label("Review population scope key", exact=True).fill(scope)
+    if complete:
+        page.get_by_label("Synthetic a — unique workers").fill("1")
+    page.get_by_label("Contract review CSV", exact=False).set_input_files(
+        {
+            "name": "synthetic-contracts.csv",
+            "mimeType": "text/csv",
+            "buffer": helper["body"]([record]),
+        }
+    )
+    page.get_by_role("button", name="Import contract review", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Reviewed individual restrictions")
+    ).to_be_visible()
+    assert page.evaluate("window.syntheticUnsafe === undefined")
+    assert "private-browser-worker" not in page.locator("body").inner_text()
+
+
+def finish_analytical_screen(page):
+    expect(
+        page.get_by_role("link", name="Read screen results", exact=True)
+    ).to_be_visible(timeout=120000)
+    page.get_by_role("link", name="Read screen results", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Analytical context for this screen")
+    ).to_be_visible()
+
+
+def test_analytical_import_review_and_flow_market(browser):
+    from nopoach.analytical_inputs import read_bundle
+    from nopoach.market.define import scope_key
+
+    page, app, artifacts = browser
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    root = artifacts / "synthetic-analytical"
+    market, population = analytical_fixture(root)
+    page.get_by_label("Workspace folder").fill(str(root))
+    page.get_by_role("button", name="Open workspace").click()
+    page.get_by_label("Occupation codes (SOC)").fill("29-1141, 15-1252")
+    page.get_by_label("State or metro code").fill("00123")
+    page.get_by_label("First year", exact=True).fill("2020")
+    page.get_by_label("Last year", exact=True).fill("2021")
+    page.get_by_role("button", name="Propose competitors").click()
+    page.get_by_role("link", name="Import data", exact=True).click()
+    import_public_context(page)
+    import_contract_review(page, scope_key(market), complete=True)
+    expect(
+        page.get_by_role("heading", name="Synthetic a — Tested: threshold met")
+    ).to_be_visible()
+    accessibility(page)
+    page.get_by_role("link", name="Define market", exact=True).click()
+    page.get_by_role("button", name="Run screen", exact=True).click()
+    finish_analytical_screen(page)
+    expect(
+        page.get_by_role("region", name="Public and modeled annual mobility")
+    ).to_be_visible()
+    assert app.state.session.result.analytical.public_context.status == "context_only"
+    expect(
+        page.get_by_role("heading", name="Synthetic a — Tested: threshold met")
+    ).to_be_visible()
+    accessibility(page)
+    page.set_viewport_size({"width": 360, "height": 800})
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    accessibility(page)
+    page.set_viewport_size({"width": 1440, "height": 1000})
+
+    # Import the independent population through labeled controls, with no SOC or metro.
+    page.get_by_role("link", name="Import data", exact=True).click()
+    page.locator("#flow-input > summary").click()
+    with Workspace.open(root) as workspace:
+        bundle = read_bundle(workspace, population)
+    page.get_by_label("Population label", exact=True).fill("synthetic-browser")
+    page.get_by_label("Population description", exact=True).fill(
+        "Synthetic independent worker population"
+    )
+    page.get_by_label("Headcount source", exact=True).fill(
+        "Synthetic annual headcounts"
+    )
+    page.get_by_role(
+        "group", name="History source receipts defining the population"
+    ).get_by_label("Synthetic analytical histories", exact=False).check()
+    for employer in "abcdef":
+        page.get_by_role("group", name="Candidate employers", exact=True).get_by_label(
+            f"Synthetic {employer} ({employer})", exact=True
+        ).check()
+    page.get_by_label("Dated population headcounts CSV", exact=False).set_input_files(
+        {
+            "name": "synthetic-headcounts.csv",
+            "mimeType": "text/csv",
+            "buffer": bundle.body,
+        }
+    )
+    page.get_by_role("button", name="Import flow population", exact=True).click()
+    assert app.state.session.result is None
+    page.get_by_role("link", name="Define market", exact=True).click()
+    page.get_by_role("link", name="Flow-defined population", exact=True).click()
+    assert page.get_by_label("Occupation codes (SOC)").count() == 0
+    page.get_by_role("button", name="Propose flow groups").focus()
+    page.keyboard.press("Enter")
+    expect(page.get_by_role("link", name="Review proposed groups")).to_be_visible(
+        timeout=120000
+    )
+    page.get_by_role("link", name="Review proposed groups").click()
+    expect(page.get_by_role("heading", name="Group 1", exact=True)).to_be_visible()
+    expect(page.get_by_text("Excluded if selected:", exact=False).first).to_be_visible()
+    page.get_by_role("group", name="Manual additions").get_by_label(
+        "Synthetic d", exact=True
+    ).check()
+    page.get_by_role("group", name="Manual removals").get_by_label(
+        "Synthetic c", exact=True
+    ).check()
+    accessibility(page)
+    page.get_by_role("button", name="Confirm group and run").click()
+    finish_analytical_screen(page)
+    context = app.state.session.result.analytical
+    assert context.cluster_selection.added_employer_ids == ("d",)
+    assert context.cluster_selection.removed_employer_ids == ("c",)
+    assert context.public_context.status == "unavailable"
+    page.get_by_role("link", name="Define market", exact=True).click()
+    evidence = Path(__file__).parents[2] / "docs/plans/evidence"
+    evidence.mkdir(exist_ok=True)
+    page.set_viewport_size({"width": 1440, "height": 1400})
+    page.get_by_role("heading", name="Review proposed groups", exact=True).evaluate(
+        "element => element.scrollIntoView({block: 'start'})"
+    )
+    page.screenshot(path=str(evidence / "nopo-3-market.png"), full_page=False)
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.get_by_role("button", name="Propose flow groups").click()
+    expect(page.get_by_role("link", name="Review proposed groups")).to_be_visible(
+        timeout=120000
+    )
+    page.get_by_role("link", name="Review proposed groups").click()
+    expect(
+        page.get_by_role("group", name="Manual additions").get_by_label("Synthetic d")
+    ).to_be_checked()
+    expect(
+        page.get_by_role("group", name="Manual removals").get_by_label("Synthetic c")
+    ).to_be_checked()
+    page.get_by_role("link", name="Import data", exact=True).click()
+    import_contract_review(page, scope_key(app.state.session.market), complete=False)
+    expect(
+        page.get_by_role("heading", name="Synthetic a — Not testable")
+    ).to_be_visible()
+    accessibility(page)
+    page.get_by_role(
+        "region", name="Reviewed individual restrictions"
+    ).scroll_into_view_if_needed()
+    page.screenshot(path=str(evidence / "nopo-3-imports.png"), full_page=False)
+    page.set_viewport_size({"width": 360, "height": 800})
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    accessibility(page)
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.get_by_role("link", name="Define market", exact=True).click()
+    page.get_by_role("button", name="Confirm group and run").click()
+    finish_analytical_screen(page)
+    expect(
+        page.get_by_text("Cross-boundary pairs not evaluated:", exact=False)
+    ).to_be_visible()
+    expect(
+        page.get_by_role("heading", name="Synthetic a — Not testable")
+    ).to_be_visible()
+    accessibility(page)
+    page.get_by_role("heading", name="Flow-based competitor review").evaluate(
+        "element => element.scrollIntoView({block: 'start'})"
+    )
+    page.screenshot(path=str(evidence / "nopo-3-screen.png"), full_page=False)
+    page.locator("#unreliable > summary").click()
+    page.get_by_role("link", name="Synthetic a / Synthetic b", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Public mobility context", exact=True)
+    ).to_be_visible()
+    expect(
+        page.get_by_role("heading", name="Synthetic a — Not testable")
+    ).to_be_visible()
+    accessibility(page)
+    page.get_by_role("heading", name="Flow-based competitor review").evaluate(
+        "element => element.scrollIntoView({block: 'start'})"
+    )
+    page.screenshot(path=str(evidence / "nopo-3-dossier.png"), full_page=False)
+    page.set_viewport_size({"width": 360, "height": 800})
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    accessibility(page)
+    assert not errors

@@ -11,6 +11,11 @@ alternative explanations, and export a Word dossier through the local browser
 interface. Analysts prepare lawful imports and resolve employer identities.
 Agency IT reviews and runs the application on agency-controlled machines.
 
+Optional analytical checks add a reviewed competitor grouping from earlier
+worker moves, public Census mobility context, and individual non-compete
+evidence for a declared review population. The occupation/geography screen
+remains the default, and these checks do not add ranking weights.
+
 ## Install for a lawyer
 
 1. Ask IT to review the release's `IT-REVIEW.md`, `SHA256SUMS.txt`, CycloneDX
@@ -34,6 +39,37 @@ A blank workspace contains no collected data. The default launcher uses the
 workspace's stored data; additional public collectors require analyst
 configuration. Do not run two copies on port 8765. A browser address typed by
 hand lacks the initial session token: restart the app to open a fresh session.
+
+### Use the optional analytical checks
+
+Import analytical files through **Import data**, with their source declarations.
+These files stay in the external workspace. Accepted versions remain available
+for selection when the workspace is reopened; failed imports preserve the
+previous valid selection.
+
+- **Flow-defined population:** Choose the market's flow-defined mode, declare
+  the source receipts and candidate employers, and import annual workforce
+  counts for that population. Supply a training period ending before the
+  assessment period. Review the proposed groups, unassigned employers and
+  omitted pairs, then confirm a group and any manual changes. Occupation and
+  metro boundaries are not required for this alternative. An unavailable
+  proposal leaves the ordinary market path available.
+- **Public mobility context:** Import a supported local Census J2JOD CSV or
+  gzip file and its release, availability and ownership declarations. A numeric
+  comparison requires a matching metro with known workplace geography and at
+  least two complete common years. It compares annual patterns; it does not
+  calibrate employer-pair expected flows. State and flow-defined screens report
+  this comparison as unavailable.
+- **Individual non-competes:** Import a UTF-8 CSV containing contract text and
+  explicit review decisions, together with the population description, sampling
+  basis, scope and unique-worker counts. Candidate excerpts alone cannot make
+  prevalence testable. A complete, applicable review population is required.
+
+The [method and input specifications](docs/method.md#optional-analytical-inputs)
+list the exact columns, declarations and limits. Review the analytical panel
+even when no pair fires. HTML and Word dossiers retain the screen's selected
+versions, settings and results. Changing dependencies requires a fresh screen;
+an older result retained after a failed run is labeled as prior evidence.
 
 ## Install and review for IT
 

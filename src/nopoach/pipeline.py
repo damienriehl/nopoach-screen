@@ -13,6 +13,8 @@ Accepting a partial screen records that choice; it does not change reliability.
 Centroids use a common local equirectangular projection in kilometres for flow scoring
 and explanations.
 This is a metro-scale distance approximation, not a geodesic measurement.
+Flow-defined populations instead use supplied coordinates, spherical centroids and
+geodesic distances; missing covariates remain explicit.
 """
 
 import json
@@ -24,15 +26,39 @@ from math import cos, radians
 from typing import Any
 from uuid import uuid4
 
+from nopoach.analytical_context import (
+    AnalyticalSnapshot,
+    flow_explanation_inputs,
+    freeze_sources,
+    population_references,
+)
+from nopoach.analytical_inputs import AnalyticalInputs, ClusterSettings, read_bundle
 from nopoach.catalog.recommend import Recommendation, recommend_sources
 from nopoach.collect.dol import DolRecord, load_dol_records
+from nopoach.collect.lehd import parse_j2j
+from nopoach.imports.flow_population import FlowPopulation, load_population
+from nopoach.imports.noncompetes import load_contracts
+from nopoach.market.clusters import (
+    ClusterProposal,
+    propose_clusters,
+    selection_summary,
+    validate_proposal,
+)
 from nopoach.market.coverage import (
     CoverageReport,
     MarketWorker,
     coverage_report,
     dol_in_period,
 )
-from nopoach.market.define import Employer, Geography, Market, soc_code
+from nopoach.market.define import (
+    Employer,
+    FlowDefinedMarket,
+    Geography,
+    Market,
+    MarketDefinition,
+    scope_key,
+    soc_code,
+)
 from nopoach.market.sufficiency import SignalSufficiency, Verdict, signal_sufficiency
 from nopoach.rank.aggregate import RankedPair, rank_pairs
 from nopoach.rank.explanations import EmployerExplanationData
@@ -46,6 +72,8 @@ from nopoach.signals.clauses import (
     score_pairs as score_clauses,
 )
 from nopoach.signals.flow import FlowEmployer, ResolvedPosition, screen_flow
+from nopoach.signals.lehd import ModeledFlow, temporal_context
+from nopoach.signals.noncompetes import assess_contracts
 from nopoach.signals.ties import PairTies, board, executive
 from nopoach.signals.ties import positions as tie_positions
 from nopoach.signals.ties import score_pair as score_ties
@@ -75,7 +103,7 @@ class UnreliablePair:
 @dataclass(frozen=True)
 class ScreenResult:
     screen_id: str
-    market: Market
+    market: MarketDefinition
     as_of: date | None
     mutual: tuple[RankedPair, ...]
     one_way: tuple[RankedPair, ...]
@@ -88,6 +116,7 @@ class ScreenResult:
     references: tuple[PairReferences, ...]
     method: str
     explanation_method: str
+    analytical: AnalyticalSnapshot | None = None
 
 
 def _filtered_workspace(workspace: Workspace, cutoff: date | None) -> Workspace:
@@ -208,17 +237,26 @@ def _resolved_positions(workspace: Workspace) -> tuple[ResolvedPosition, ...]:
         for identifier, cbsa in workspace.connection.execute(
             "SELECT position_id, cbsa FROM position_worksites"
         ).fetchall()
+        if cbsa
     }
     return ResolvedPosition.from_workspace(workspace, geography_by_position=geography)
 
 
 def _workers(
-    positions: tuple[ResolvedPosition, ...], market: Market, end: date
+    positions: tuple[ResolvedPosition, ...], market: MarketDefinition, end: date
 ) -> tuple[MarketWorker, ...]:
     return tuple(
-        MarketWorker(p.person_id, p.employer_id, p.occupation_code, p.geography, year)
+        MarketWorker(
+            p.person_id,
+            p.employer_id,
+            p.occupation_code,
+            p.geography,
+            year,
+            p.provenance_id,
+        )
         for p in positions
-        if p.geography is not None and p.start_date is not None
+        if (p.geography is not None or isinstance(market, FlowDefinedMarket))
+        and p.start_date is not None
         for year in range(market.start_year, market.end_year + 1)
         if p.start_date <= min(date(year, 12, 31), end)
         and (p.end_date is None or p.end_date >= date(year, 1, 1))
@@ -510,18 +548,136 @@ def _references(workspace: Workspace, pair: RankedPair) -> PairReferences:
     )
 
 
+def _training_inputs(
+    workspace: Workspace,
+    market: FlowDefinedMarket,
+    population: FlowPopulation,
+    settings: ClusterSettings,
+) -> tuple[tuple[ResolvedPosition, ...], CoverageReport]:
+    if settings.pre_end_year >= market.start_year:
+        raise ValueError("The proposal pre-period must end before assessment")
+    cutoff = date(settings.pre_end_year, 12, 31)
+    pre_market = replace(
+        market,
+        start_year=settings.pre_start_year,
+        end_year=settings.pre_end_year,
+        employer_ids=market.candidate_employer_ids,
+        added_employer_ids=frozenset(),
+        removed_employer_ids=frozenset(),
+    )
+    view = _filtered_workspace(workspace, cutoff)
+    try:
+        positions = _resolved_positions(view)
+        names = dict(
+            view.connection.execute("SELECT id, name FROM employers").fetchall()
+        )
+        missing = pre_market.candidate_employer_ids - names.keys()
+        if missing:
+            raise ValueError(
+                "Flow population names employers absent from the workspace"
+            )
+        employers = tuple(
+            Employer(e, names[e]) for e in sorted(pre_market.employer_ids)
+        )
+        report = coverage_report(
+            pre_market,
+            employers,
+            population.estimates(pre_market, as_of=cutoff),
+            workers=_workers(positions, pre_market, cutoff),
+        )
+        return positions, report
+    finally:
+        view.close()
+
+
+def propose_flow_market(
+    workspace: Workspace,
+    analytical_inputs: AnalyticalInputs,
+    *,
+    start_year: int,
+    end_year: int,
+) -> tuple[FlowDefinedMarket, ClusterProposal]:
+    """Build a proposal from the declared independent population and pre-period."""
+    ref, settings = (
+        analytical_inputs.flow_population,
+        analytical_inputs.cluster_settings,
+    )
+    if ref is None or settings is None:
+        raise ValueError(
+            "A flow proposal requires population input and cluster settings"
+        )
+    freeze_sources(workspace, analytical_inputs)
+    population = load_population(workspace, ref)
+    market = FlowDefinedMarket(
+        start_year,
+        end_year,
+        population.population_id,
+        population.description,
+        population.provenance_ids,
+        population.employer_ids,
+        population.employer_ids,
+    )
+    positions, coverage = _training_inputs(workspace, market, population, settings)
+    proposal = propose_clusters(
+        market,
+        positions,
+        coverage,
+        settings,
+        source_references=population_references(ref, population.receipt_id),
+    )
+    return market, proposal
+
+
 def run_screen(
     workspace: Workspace,
-    market: Market,
+    market: MarketDefinition,
     *,
     as_of: date | None = None,
     accept_partial: bool = False,
+    analytical_inputs: AnalyticalInputs | None = None,
+    cluster_proposal: ClusterProposal | None = None,
 ) -> ScreenResult:
     """Run all available signals without collection and persist inputs/summary."""
     end = min(date(market.end_year, 12, 31), as_of or date.max)
     start = date(market.start_year, 1, 1)
     if end < start:
         raise ValueError("as_of precedes the market window")
+    sources = freeze_sources(workspace, analytical_inputs) if analytical_inputs else ()
+    population = None
+    selection = None
+    if isinstance(market, FlowDefinedMarket):
+        if (
+            analytical_inputs is None
+            or analytical_inputs.flow_population is None
+            or analytical_inputs.cluster_settings is None
+            or cluster_proposal is None
+        ):
+            raise ValueError(
+                "A flow screen requires its population, settings and confirmed proposal"
+            )
+        population = load_population(workspace, analytical_inputs.flow_population)
+        if cluster_proposal.settings != analytical_inputs.cluster_settings or not set(
+            population_references(
+                analytical_inputs.flow_population, population.receipt_id
+            )
+        ) <= set(cluster_proposal.source_references):
+            raise ValueError(
+                "The proposal settings or population bundle changed; "
+                "review a new proposal"
+            )
+        training, precoverage = _training_inputs(
+            workspace, market, population, analytical_inputs.cluster_settings
+        )
+        validate_proposal(cluster_proposal, market, training, precoverage)
+        selection = selection_summary(cluster_proposal, market)
+    elif cluster_proposal is not None or (
+        analytical_inputs is not None
+        and (
+            analytical_inputs.flow_population is not None
+            or analytical_inputs.cluster_settings is not None
+        )
+    ):
+        raise ValueError("Population and cluster inputs require a flow-defined market")
     effective_market = replace(market, end_year=end.year)
     view = _filtered_workspace(workspace, as_of)
     try:
@@ -546,20 +702,98 @@ def run_screen(
             employers,
             workers=_workers(positions, effective_market, end),
             workspace=view,
+            estimates=population.estimates(effective_market, as_of=as_of)
+            if population is not None
+            and isinstance(effective_market, FlowDefinedMarket)
+            else None,
         )
-        explanation_data, flow_locations = _explanation_inputs(
-            view, positions, employers, effective_market, end
-        )
+        omissions: tuple[str, ...] = ()
+        if isinstance(effective_market, FlowDefinedMarket):
+            explanation_data, flow_locations, omissions = flow_explanation_inputs(
+                view, positions, employers, effective_market, end
+            )
+        else:
+            explanation_data, flow_locations = _explanation_inputs(
+                view, positions, employers, effective_market, end
+            )
         flow_employers = tuple(
             FlowEmployer(
                 e.id,
                 flow_locations[e.id],
                 explanation_data[e.id].occupation_shares or {},
+                geodesic=isinstance(effective_market, FlowDefinedMarket),
             )
             for e in employers
             if e.id in flow_locations
         )
         flow = screen_flow(effective_market, positions, flow_employers, report)
+        analytical = None
+        if analytical_inputs is not None:
+            public_context = None
+            contracts = None
+            if analytical_inputs.j2j is not None:
+                bundle = read_bundle(workspace, analytical_inputs.j2j)
+                public_context = temporal_context(
+                    parse_j2j(bundle.body, bundle.metadata),
+                    geography_kind=effective_market.geography.kind
+                    if isinstance(effective_market, Market)
+                    else "flow",
+                    geography_code=effective_market.geography.code
+                    if isinstance(effective_market, Market)
+                    else "",
+                    start_year=effective_market.start_year,
+                    end_year=effective_market.end_year,
+                    employer_ids=[e.id for e in employers],
+                    modeled=tuple(
+                        ModeledFlow(d.source_id, d.destination_id, y.year, y.expected)
+                        for p in flow.pairs
+                        for d in p.directions
+                        for y in d.years
+                    ),
+                    workplace_geography_known=bundle.metadata.get("workplace_geography")
+                    == "workplace",
+                    as_of=as_of,
+                    source_reference=f"provenance:{bundle.provenance_id}",
+                )
+            if analytical_inputs.contracts is not None:
+                corpus = load_contracts(workspace, analytical_inputs.contracts)
+                contracts = assess_contracts(
+                    corpus,
+                    scope=scope_key(effective_market),
+                    start=start,
+                    end=end,
+                    as_of=as_of,
+                    provenance_id=corpus.provenance_id,
+                )
+                for prevalence in contracts.employers:
+                    if prevalence.employer_id in explanation_data:
+                        explanation_data[prevalence.employer_id] = replace(
+                            explanation_data[prevalence.employer_id],
+                            noncompete_prevalence=prevalence,
+                        )
+            named_ids = (
+                set(selection.universe)
+                if selection is not None
+                else {e.id for e in employers}
+            )
+            if contracts is not None:
+                named_ids.update(e.employer_id for e in contracts.employers)
+            analytical = AnalyticalSnapshot(
+                analytical_inputs,
+                sources,
+                public_context,
+                contracts,
+                cluster_proposal,
+                selection,
+                omissions,
+                employer_names=tuple(
+                    (identifier, name)
+                    for identifier, name in view.connection.execute(
+                        "SELECT id, name FROM employers ORDER BY id"
+                    ).fetchall()
+                    if identifier in named_ids
+                ),
+            )
         effective = {
             (d.source_id, d.destination_id): sum(y.expected for y in d.years)
             for p in flow.pairs
@@ -635,6 +869,7 @@ def run_screen(
             references,
             ranked.method,
             ranked.explanation_method,
+            analytical,
         )
     finally:
         view.close()
@@ -670,6 +905,9 @@ def _persist(workspace: Workspace, result: ScreenResult) -> None:
         "one_way": [_lead_summary(p) for p in result.one_way],
         "recommendation_ids": [r.source.id for r in result.recommendations],
     }
+    if result.analytical is not None:
+        parameters["analytical_inputs"] = json.loads(result.analytical.inputs.to_json())
+        summary["analytical"] = asdict(result.analytical)
     body = json.dumps(
         {"inputs": parameters, "summary": summary}, sort_keys=True
     ).encode()
@@ -688,8 +926,17 @@ def _persist(workspace: Workspace, result: ScreenResult) -> None:
             [
                 market_id,
                 "Workspace screen",
-                ",".join(sorted(result.market.occupation_codes)),
-                json.dumps(asdict(result.market.geography)),
+                ",".join(sorted(result.market.occupation_codes))
+                if isinstance(result.market, Market)
+                else None,
+                json.dumps(asdict(result.market.geography))
+                if isinstance(result.market, Market)
+                else json.dumps(
+                    {
+                        "kind": "flow_defined",
+                        "population_id": result.market.population_id,
+                    }
+                ),
                 date(result.market.start_year, 1, 1),
                 date(result.market.end_year, 12, 31),
                 receipt.id,

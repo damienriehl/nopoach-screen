@@ -5,7 +5,7 @@ import importlib
 import io
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,19 +17,44 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from nopoach.analytical_inputs import (
+    AnalyticalInputs,
+    BundleRef,
+    ClusterSettings,
+    inspect_bundles,
+    read_bundle,
+)
+from nopoach.collect.lehd import import_j2j
+from nopoach.imports.flow_population import import_population, parse_population
 from nopoach.imports.loader import ImportResult, column_mapping, import_file
+from nopoach.imports.noncompetes import (
+    import_contracts,
+    load_contracts,
+    parse_contracts,
+)
 from nopoach.imports.schema import COLUMNS, VENDOR_ALIASES, ProvenanceClass
+from nopoach.market.clusters import ClusterProposal, confirm_group, selection_summary
 from nopoach.market.coverage import workspace_estimates
-from nopoach.market.define import Employer, Geography, Market, propose_competitors
-from nopoach.pipeline import ScreenResult, run_screen
+from nopoach.market.define import (
+    Employer,
+    FlowDefinedMarket,
+    Geography,
+    Market,
+    MarketDefinition,
+    propose_competitors,
+    scope_description,
+    scope_key,
+)
+from nopoach.pipeline import ScreenResult, propose_flow_market, run_screen
 from nopoach.rank import wording
 from nopoach.rank.aggregate import RankedPair
 from nopoach.resolve.parents import ParentResolver
+from nopoach.signals.noncompetes import assess_contracts
 from nopoach.store.workspace import Workspace
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parents[1] / "templates")
-templates.env.globals["wording"] = wording
+templates.env.globals.update(wording=wording, scope_description=scope_description)
 
 
 @dataclass
@@ -43,7 +68,76 @@ class UploadPreview:
 @dataclass
 class Session:
     folder: Path | None = None
-    market: Market | None = None
+    market: MarketDefinition | None = None
+    analytical_inputs: AnalyticalInputs = field(default_factory=AnalyticalInputs)
+    cluster_proposal: ClusterProposal | None = None
+    proposal_job: bool = False
+    prior_result: bool = False
+
+    def invalidate(self, *, graph: bool = False) -> None:
+        self.result = None
+        self.prior_result = False
+        self.failures = {}
+        self.status = "Defined" if self.market else "Empty"
+        if graph:
+            self.cluster_proposal = None
+
+    def active_inputs(self) -> AnalyticalInputs | None:
+        inputs = self.analytical_inputs
+        if not isinstance(self.market, FlowDefinedMarket):
+            inputs = replace(inputs, flow_population=None, cluster_settings=None)
+        return (
+            inputs
+            if any((inputs.j2j, inputs.contracts, inputs.flow_population))
+            else None
+        )
+
+    def propose(self, start: int, end: int, settings: ClusterSettings) -> None:
+        folder = idle(self)
+        inputs = replace(self.analytical_inputs, cluster_settings=settings)
+        if inputs.flow_population is None:
+            raise ValueError("Select a flow population on Import data first")
+        if not 1 <= start <= end <= 9999 or settings.pre_end_year >= start:
+            raise ValueError(
+                "The training period must end before the assessment starts"
+            )
+        previous = self.market
+        self.invalidate(graph=True)
+        self.analytical_inputs = inputs
+        self.status, self.proposal_job = "Collecting", True
+        self.progress = "Fitting the earlier-period flow population."
+        self.executor.submit(self._propose, folder, inputs, start, end, previous)
+
+    def _propose(
+        self,
+        folder: Path,
+        inputs: AnalyticalInputs,
+        start: int,
+        end: int,
+        previous: MarketDefinition | None,
+    ) -> None:
+        try:
+            with Workspace.open(folder) as workspace:
+                market, proposal = propose_flow_market(
+                    workspace, inputs, start_year=start, end_year=end
+                )
+            if isinstance(previous, FlowDefinedMarket) and scope_key(
+                previous
+            ) == scope_key(market):
+                market = replace(
+                    market,
+                    added_employer_ids=previous.added_employer_ids,
+                    removed_employer_ids=previous.removed_employer_ids,
+                )
+            self.market, self.cluster_proposal = market, proposal
+            self.status = "Defined"
+            self.progress = "Review the proposed groups and confirm before screening."
+        except Exception as exc:
+            self.status = "Failed"
+            self.progress = (
+                f"Grouping unavailable: {exc}. Ordinary selection remains available."
+            )
+
     employers: list[tuple[str, str]] = field(default_factory=list)
     status: str = "Empty"
     progress: str = "Choose a workspace."
@@ -65,19 +159,37 @@ class Session:
             raise HTTPException(409, "A screen is already running")
         if self.folder is None or self.market is None:
             raise HTTPException(409, "Define a market before running a screen")
-        self.status = "Collecting"
+        if isinstance(self.market, FlowDefinedMarket) and (
+            self.cluster_proposal is None or not self.market.cluster_digest
+        ):
+            raise HTTPException(409, "Review and confirm a fresh flow proposal first")
+        inputs = self.active_inputs()
+        proposal = (
+            self.cluster_proposal
+            if isinstance(self.market, FlowDefinedMarket)
+            else None
+        )
+        self.status, self.proposal_job = "Collecting", False
         self.progress = "Preparing stored records."
-        self.executor.submit(self._run, self.folder, self.market, retry, accept_partial)
+        self.executor.submit(
+            self._run, self.folder, self.market, retry, accept_partial, inputs, proposal
+        )
 
     def _run(
-        self, folder: Path, market: Market, retry: str | None, accept_partial: bool
+        self,
+        folder: Path,
+        market: MarketDefinition,
+        retry: str | None,
+        accept_partial: bool,
+        inputs: AnalyticalInputs | None,
+        proposal: ClusterProposal | None,
     ) -> None:
         if retry is None and not accept_partial:
             self.failures = {}
         try:
             with Workspace.open(folder) as workspace:
                 for name, collect in self.collectors.items():
-                    if accept_partial:
+                    if accept_partial or isinstance(market, FlowDefinedMarket):
                         break
                     if retry is not None and retry != name:
                         continue
@@ -88,13 +200,16 @@ class Session:
                     except Exception as exc:
                         self.failures[name] = str(exc)
                 self.progress = "Scoring stored evidence across three signals."
-                self.result = run_screen(
-                    workspace, market, accept_partial=accept_partial
-                )
+                options: dict[str, Any] = {"accept_partial": accept_partial}
+                if inputs is not None:
+                    options.update(analytical_inputs=inputs, cluster_proposal=proposal)
+                self.result = run_screen(workspace, market, **options)
+                self.prior_result = False
                 self.failures.pop("Screen scoring", None)
             self.status = self._finished_status(self.result, accept_partial)
             self.progress = "Screen finished. Review coverage and sufficiency."
         except Exception as exc:
+            self.prior_result = self.result is not None
             self.failures["Screen scoring"] = str(exc)
             self.progress = "Scoring failed. Stored records and prior results are kept."
             self.status = "Failed"
@@ -116,6 +231,59 @@ def page(
     request: Request, name: str, *, status_code: int = 200, **context: Any
 ) -> HTMLResponse:
     session = state(request)
+    context.setdefault(
+        "flow_mode",
+        request.query_params.get(
+            "mode",
+            "flow" if isinstance(session.market, FlowDefinedMarket) else "ordinary",
+        )
+        == "flow",
+    )
+    context.setdefault("employer_names", dict(session.employers))
+    if (
+        isinstance(session.market, FlowDefinedMarket)
+        and session.cluster_proposal
+        and session.market.cluster_digest
+    ):
+        context.setdefault(
+            "cluster_selection",
+            selection_summary(session.cluster_proposal, session.market),
+        )
+    context.setdefault("scope", scope_key(session.market) if session.market else "")
+    if name == "imports.html" and session.folder and session.status != "Collecting":
+        with Workspace.open(session.folder) as workspace:
+            bundles = []
+            issues: list[str] = []
+            try:
+                inventory, inventory_issues = inspect_bundles(workspace)
+                issues.extend(inventory_issues)
+            except (ValueError, OSError) as exc:
+                inventory = ()
+                issues.append(f"Input inventory integrity check failed: {exc}")
+            for ref in inventory:
+                try:
+                    bundle = read_bundle(workspace, ref)
+                    bundles.append((ref, bundle.metadata))
+                except (ValueError, OSError) as exc:
+                    issues.append(f"Input version integrity check failed: {exc}")
+            context["bundles"] = bundles
+            context["receipts"] = workspace.provenance.records()
+            if session.analytical_inputs.contracts and session.market:
+                try:
+                    corpus = load_contracts(
+                        workspace, session.analytical_inputs.contracts
+                    )
+                    context["contract_review"] = assess_contracts(
+                        corpus,
+                        scope=scope_key(session.market),
+                        start=date(session.market.start_year, 1, 1),
+                        end=date(session.market.end_year, 12, 31),
+                    )
+                except (ValueError, OSError) as exc:
+                    issues.append(
+                        f"Selected contract review integrity check failed: {exc}"
+                    )
+            context["integrity_issues"] = issues
     return templates.TemplateResponse(
         request=request,
         name=name,
@@ -183,6 +351,8 @@ async def choose_workspace(request: Request) -> HTMLResponse:
     if session.status == "Collecting":
         raise HTTPException(409, "Wait for the running screen to finish")
     form = await request.form()
+    if session.status == "Collecting":
+        raise HTTPException(409, "Wait for the running screen to finish")
     try:
         folder = str(form.get("folder", "")).strip()
         if not folder:
@@ -194,6 +364,10 @@ async def choose_workspace(request: Request) -> HTMLResponse:
             root = workspace.root
         session.folder, session.employers = root, employers
         session.market, session.result = None, None
+        session.analytical_inputs = AnalyticalInputs()
+        session.cluster_proposal = None
+        session.proposal_job = False
+        session.prior_result = False
         session.uploads.clear()
         session.upload_id, session.import_result = None, None
         session.failures = {}
@@ -219,8 +393,9 @@ def market_page(request: Request) -> HTMLResponse | RedirectResponse:
 @router.post("/market")
 async def define_market(request: Request) -> HTMLResponse:
     session = state(request)
-    folder = idle(session)
+    idle(session)
     form = await request.form()
+    folder = idle(session)
     try:
         market = Market(
             frozenset(str(form.get("occupations", "")).replace(",", " ").split()),
@@ -237,9 +412,7 @@ async def define_market(request: Request) -> HTMLResponse:
         known = {identifier for identifier, _ in session.employers}
         if market.employer_ids is not None and not market.employer_ids <= known:
             raise ValueError("Select employers from this workspace")
-        if session.market != market:
-            session.result = None
-            session.failures = {}
+        session.invalidate(graph=True)
         session.market = market
         if form.get("action") == "propose":
             with Workspace.open(folder) as workspace:
@@ -249,7 +422,11 @@ async def define_market(request: Request) -> HTMLResponse:
                     workspace_estimates(workspace, market),
                 )
             return page(
-                request, "market.html", title="Confirm competitors", proposal=proposal
+                request,
+                "market.html",
+                title="Confirm competitors",
+                proposal=proposal,
+                flow_mode=False,
             )
         session.status = "Defined"
         session.start()
@@ -260,13 +437,14 @@ async def define_market(request: Request) -> HTMLResponse:
             title="Define the market",
             error=str(exc),
             proposal=None,
+            flow_mode=False,
             status_code=400,
         )
     return page(request, "progress.html", title="Screen progress")
 
 
 @router.post("/screen/run")
-def start_screen(request: Request) -> HTMLResponse:
+async def start_screen(request: Request) -> HTMLResponse:
     state(request).start()
     return page(request, "progress.html", title="Screen progress")
 
@@ -324,6 +502,7 @@ def screen(
         request,
         "screen.html",
         title="Ranked screen",
+        market=result.market,
         leads=filtered[(page_number - 1) * 20 : page_number * 20],
         tab=tab,
         signal=signal,
@@ -394,9 +573,10 @@ async def preview_import(request: Request) -> HTMLResponse:
     upload = form.get("file")
     if upload is None or isinstance(upload, str):
         raise HTTPException(400, "Choose a CSV or Parquet file")
-    body = await upload.read()
     suffix = Path(upload.filename or "").suffix.lower()
     try:
+        body = await bounded_upload(upload, 64 * 1024 * 1024)
+        idle(session)
         if suffix == ".csv":
             columns = next(csv.reader(io.StringIO(body.decode("utf-8-sig"))))
         elif suffix == ".parquet":
@@ -471,7 +651,8 @@ async def load_import(request: Request) -> HTMLResponse:
         session.uploads.pop(upload_id)
         if session.upload_id == upload_id:
             session.upload_id = None
-        if session.market is not None:
+        session.invalidate(graph=True)
+        if isinstance(session.market, Market):
             session.start()
     except ValueError as exc:
         return page(
@@ -497,8 +678,9 @@ async def load_import(request: Request) -> HTMLResponse:
 @router.post("/imports/parent")
 async def parent_override(request: Request) -> HTMLResponse:
     session = state(request)
-    folder = idle(session)
+    idle(session)
     form = await request.form()
+    folder = idle(session)
     try:
         with Workspace.open(folder) as workspace:
             reason = str(form.get("reason", "")).strip()
@@ -522,7 +704,8 @@ async def parent_override(request: Request) -> HTMLResponse:
                 origin="manual_override",
                 reason=reason,
             )
-        if session.market:
+        session.invalidate(graph=True)
+        if isinstance(session.market, Market):
             session.start()
     except ValueError as exc:
         return page(
@@ -611,6 +794,7 @@ def dossier(request: Request, a: str, b: str) -> HTMLResponse:
         "dossier.html",
         title=f"{pair.employer_a_name} / {pair.employer_b_name}",
         pair=pair,
+        market=session.result.market,
         sources=sources,
         records=records,
         imports=imports,
@@ -663,3 +847,225 @@ def export(request: Request, a: str, b: str) -> FileResponse | HTMLResponse:
         filename="dossier.docx",
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+async def bounded_upload(upload: Any, limit: int) -> bytes:
+    if upload is None or isinstance(upload, str):
+        raise ValueError("Choose a local file")
+    if upload.size is not None and upload.size > limit:
+        raise ValueError(f"File exceeds the {limit // 1024 // 1024} MiB limit")
+    body: bytes = await upload.read(limit + 1)
+    if len(body) > limit:
+        raise ValueError(f"File exceeds the {limit // 1024 // 1024} MiB limit")
+    return body
+
+
+def select_input(session: Session, kind: str, ref: BundleRef | None) -> None:
+    if kind == "flow_population":
+        session.analytical_inputs = replace(
+            session.analytical_inputs, flow_population=ref
+        )
+    elif kind == "j2j":
+        session.analytical_inputs = replace(session.analytical_inputs, j2j=ref)
+    else:
+        session.analytical_inputs = replace(session.analytical_inputs, contracts=ref)
+    session.invalidate(graph=kind == "flow_population")
+
+
+@router.post("/imports/analytical/select")
+async def select_analytical(request: Request) -> HTMLResponse:
+    session = state(request)
+    idle(session)
+    form = await request.form()
+    folder = idle(session)
+    try:
+        kind, identifier = str(form.get("kind", "")), str(form.get("bundle_id", ""))
+        if kind not in {"flow_population", "j2j", "contracts"}:
+            raise ValueError("Choose an analytical input type")
+        ref = None
+        if identifier:
+            with Workspace.open(folder) as workspace:
+                ref = next(
+                    (
+                        r
+                        for r in inspect_bundles(workspace)[0]
+                        if r.kind == kind and r.bundle_id == identifier
+                    ),
+                    None,
+                )
+                if ref is None:
+                    raise ValueError("Choose a retained version from this workspace")
+                read_bundle(workspace, ref)
+        select_input(session, kind, ref)
+    except (ValueError, OSError) as exc:
+        return page(
+            request,
+            "imports.html",
+            title="Import data",
+            classes=ProvenanceClass,
+            fields=COLUMNS,
+            error=str(exc),
+            status_code=400,
+        )
+    return import_page(request)
+
+
+@router.post("/imports/analytical/{kind}")
+async def import_analytical(request: Request, kind: str) -> HTMLResponse:
+    session = state(request)
+    idle(session)
+    limits = {"flow_population": 4, "contracts": 8, "j2j": 64}
+    if kind not in limits:
+        raise HTTPException(404, "Unknown analytical input")
+    form = await request.form()
+    idle(session)
+    try:
+        body = await bounded_upload(form.get("file"), limits[kind] * 1024 * 1024)
+        folder = idle(session)
+        metadata: dict[str, Any] = {"source": str(form.get("source", ""))}
+        known = {identifier for identifier, _ in session.employers}
+        with Workspace.open(folder) as workspace:
+            if kind == "flow_population":
+                metadata.update(
+                    population_id=str(form.get("population_id", "")),
+                    description=str(form.get("description", "")),
+                    provenance_ids=[str(v) for v in form.getlist("provenance_ids")],
+                    employer_ids=[str(v) for v in form.getlist("employer_ids")],
+                )
+                population = parse_population(body, metadata)
+                if not population.employer_ids <= known:
+                    raise ValueError(
+                        "Candidate employer IDs must belong to this workspace"
+                    )
+                receipts = {r.id for r in workspace.provenance.records()}
+                if not population.provenance_ids <= receipts:
+                    raise ValueError("Select source receipts from this workspace")
+                ref = import_population(workspace, body, metadata)
+            elif kind == "j2j":
+                for key in (
+                    "schema_version",
+                    "release",
+                    "release_date",
+                    "geography",
+                    "ownercode",
+                    "ownercode_orig",
+                    "workplace_geography",
+                ):
+                    metadata[key] = str(form.get(key, ""))
+                metadata["availability"] = {
+                    "geo_level": "B",
+                    "geography": metadata["geography"],
+                    "geo_level_orig": "B",
+                    "geography_orig": metadata["geography"],
+                    **{
+                        key: int(str(form.get(key, "")))
+                        for key in (
+                            "start_year",
+                            "start_quarter",
+                            "end_year",
+                            "end_quarter",
+                        )
+                    },
+                }
+                ref = import_j2j(workspace, body, metadata)
+            else:
+                for key in ("population_description", "sampling_basis", "scope"):
+                    metadata[key] = str(form.get(key, ""))
+                metadata["declared_workers"] = {
+                    identifier: int(str(form[f"workers_{identifier}"]))
+                    for identifier in known
+                    if form.get(f"workers_{identifier}")
+                }
+                if form.get("reviewed_on"):
+                    metadata["reviewed_on"] = str(form["reviewed_on"])
+                corpus = parse_contracts(body, metadata)
+                if any(row.employer_id not in known for row in corpus.records):
+                    raise ValueError(
+                        "Contract employer IDs must belong to this workspace"
+                    )
+                ref = import_contracts(workspace, body, metadata)
+        select_input(session, kind, ref)
+    except (ValueError, OSError) as exc:
+        return page(
+            request,
+            "imports.html",
+            title="Import data",
+            classes=ProvenanceClass,
+            fields=COLUMNS,
+            error=str(exc),
+            status_code=400,
+        )
+    return import_page(request)
+
+
+@router.post("/market/flow/propose")
+async def propose_flow(request: Request) -> HTMLResponse:
+    session = state(request)
+    idle(session)
+    form = await request.form()
+    idle(session)
+    try:
+        settings = ClusterSettings(
+            int(str(form.get("pre_start_year", ""))),
+            int(str(form.get("pre_end_year", ""))),
+            groups=int(str(form.get("groups", "2"))),
+        )
+        session.propose(
+            int(str(form.get("start_year", ""))),
+            int(str(form.get("end_year", ""))),
+            settings,
+        )
+    except ValueError as exc:
+        return page(
+            request,
+            "market.html",
+            title="Define the market",
+            flow_mode=True,
+            proposal=None,
+            error=str(exc),
+            status_code=400,
+        )
+    return page(request, "progress.html", title="Group proposal progress")
+
+
+@router.post("/market/flow/confirm")
+async def confirm_flow(request: Request) -> HTMLResponse:
+    session = state(request)
+    idle(session)
+    form = await request.form()
+    idle(session)
+    try:
+        if (
+            not isinstance(session.market, FlowDefinedMarket)
+            or not session.cluster_proposal
+        ):
+            raise ValueError("Request and review a flow proposal first")
+        if form.get("proposal_digest") != session.cluster_proposal.digest:
+            raise ValueError(
+                "This proposal changed. Review the current groups before confirming."
+            )
+        market = confirm_group(
+            session.cluster_proposal,
+            replace(
+                session.market,
+                added_employer_ids=frozenset(),
+                removed_employer_ids=frozenset(),
+            ),
+            int(str(form.get("group", ""))),
+            add=frozenset(str(v) for v in form.getlist("add")),
+            remove=frozenset(str(v) for v in form.getlist("remove")),
+        )
+        session.invalidate()
+        session.market = market
+        session.start()
+    except ValueError as exc:
+        return page(
+            request,
+            "market.html",
+            title="Define the market",
+            flow_mode=True,
+            proposal=None,
+            error=str(exc),
+            status_code=400,
+        )
+    return page(request, "progress.html", title="Screen progress")
