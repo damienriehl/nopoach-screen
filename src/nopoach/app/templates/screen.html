@@ -1,4 +1,7 @@
 {% extends 'base.html' %}{% block content %}
+{% if session.prior_result and result %}<p class="caution" role="status"><strong>Prior screen.</strong> The latest run failed. This page and its exports retain the earlier screen's frozen inputs and results.</p>{% endif %}
+{% if result.analytical %}{% set analytical = result.analytical %}{% include 'analytical_context.html' %}{% endif %}
+
 {% include 'partial.html' %}
 {% if session.status in ['Insufficient', 'Failed'] %}<a class="button" href="/screen/accept">Accept partial screen</a>{% endif %}
 {% if session.failures %}{% include 'progress_fragment.html' %}{% endif %}

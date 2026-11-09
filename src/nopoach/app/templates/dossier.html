@@ -1,4 +1,7 @@
 {% extends 'base.html' %}{% block content %}
+{% if session.prior_result and result %}<p class="caution" role="status"><strong>Prior screen.</strong> The latest run failed. This page and its exports retain the earlier screen's frozen inputs and results.</p>{% endif %}
+{% if result.analytical %}{% set analytical = result.analytical %}{% include 'analytical_context.html' %}{% endif %}
+
 {% include 'partial.html' %}
 {% if unreliable %}<p class="caution"><strong>Unreliable.</strong> {{ unreliable }}</p>{% endif %}
 {% if export_available %}<a class="button" href="/pairs/{{ pair.employer_a_id }}/{{ pair.employer_b_id }}/export">Export dossier (Word)</a>{% else %}<p>Export unavailable. The Word export module is not installed in this build.</p>{% endif %}
