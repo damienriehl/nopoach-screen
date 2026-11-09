@@ -23,6 +23,7 @@ from statistics import median
 from nopoach.collect.dol import DolRecord
 from nopoach.market.define import soc_code
 from nopoach.rank import wording
+from nopoach.signals.clauses import Clause
 
 GEOGRAPHIC_SEPARATION_KM = 250.0
 PAY_GAP_THRESHOLD = 0.25
@@ -37,6 +38,15 @@ class EmployerExplanationData:
     occupation_shares: Mapping[str, float] | None = None
     external_hire_rate: float | None = None
     provenance_ids: tuple[str, ...] = ()
+    non_competes: tuple["NonCompeteEvidence", ...] = ()
+
+
+@dataclass(frozen=True)
+class NonCompeteEvidence:
+    clause: Clause
+    employer_name: str
+    eligible: bool
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -46,6 +56,7 @@ class ExplanationCheck:
     reason: str
     measurements: Mapping[str, float] = field(default_factory=dict)
     provenance_ids: tuple[str, ...] = ()
+    evidence: tuple[NonCompeteEvidence, ...] = ()
 
     @property
     def label(self) -> str:
@@ -173,7 +184,28 @@ def check_explanations(
         {**rates, "threshold": LOW_EXTERNAL_HIRE_RATE},
         sources,
     )
+    evidence = left.non_competes + right.non_competes
+    eligible = tuple(item for item in evidence if item.eligible)
+    if eligible:
+        supported = "; ".join(
+            f"{item.employer_name}: {item.clause.scope or 'worker group unknown'}"
+            for item in eligible
+        )
+        reason = wording.non_compete_reason(supported)
+        status: wording.ExplanationStatus = "passed"
+    elif evidence:
+        reason = wording.non_compete_uncertain(
+            "; ".join(dict.fromkeys(item.reason for item in evidence))
+        )
+        status = "not_testable"
+    else:
+        reason = wording.NON_COMPETE_UNAVAILABLE
+        status = "not_testable"
     non_competes = ExplanationCheck(
-        "non_compete_prevalence", "not_testable", wording.NON_COMPETE_UNAVAILABLE
+        "non_compete_prevalence",
+        status,
+        reason,
+        provenance_ids=tuple(sorted({e.clause.provenance.id for e in evidence})),
+        evidence=evidence,
     )
     return geography, pay, occupations, lateral, non_competes

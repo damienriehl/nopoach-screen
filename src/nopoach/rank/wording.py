@@ -23,7 +23,7 @@ EXPLANATION_LABELS: dict[ExplanationKey, str] = {
     "pay_gap": "Pay gap",
     "occupational_mismatch": "Occupational mismatch",
     "low_lateral_hiring": "Low lateral hiring",
-    "non_compete_prevalence": "Non-compete prevalence",
+    "non_compete_prevalence": "Non-compete document evidence",
 }
 STATUS_LABELS: dict[ExplanationStatus, str] = {
     "passed": "Passed",
@@ -45,7 +45,7 @@ RANK_METHOD = (
 EXPLANATION_METHOD = (
     "Passed means the supplied data supports a possible innocent explanation; "
     "failed means the check did not support that explanation, without ruling it "
-    "out. Not testable means the necessary data or extractor is unavailable. "
+    "out. Not testable means the necessary data or extractor results are unavailable. "
     "Thresholds are provisional screening conventions, not validated findings."
 )
 GEOGRAPHY_UNAVAILABLE = (
@@ -61,10 +61,27 @@ OCCUPATIONS_UNAVAILABLE = (
     "mismatch is not testable."
 )
 NON_COMPETE_UNAVAILABLE = (
-    "Non-compete prevalence is not testable in version 1: "
-    "no non-compete extractor is built."
+    "There are no non-compete extractor results available for the supplied complete "
+    "documents. A non-match does not establish absence. Non-compete prevalence "
+    "cannot be estimated from these documents."
 )
 RATE_UNAVAILABLE = "unavailable"
+
+
+def non_compete_reason(supported: str) -> str:
+    return (
+        f"Documentary support was found for {supported}. This is not a finding "
+        "of enforceability, actual operation, or causation. Non-compete prevalence "
+        "cannot be estimated from these documents."
+    )
+
+
+def non_compete_uncertain(reason: str) -> str:
+    return (
+        f"Documentary evidence was retained but is not testable here: {reason}. "
+        "It does not establish absence at another employer. Non-compete prevalence "
+        "cannot be estimated from these documents."
+    )
 
 
 def pair_summary(

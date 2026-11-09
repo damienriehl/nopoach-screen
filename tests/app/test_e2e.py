@@ -5,10 +5,12 @@ The host must inspect ranked-list.png and dossier.png for reading legibility.
 """
 
 import io
+import os
 import re
 import runpy
 import socket
 import time
+from datetime import date
 from pathlib import Path
 from threading import Thread
 from urllib.parse import urljoin, urlsplit
@@ -19,6 +21,8 @@ from axe_playwright_python.sync_playwright import Axe
 from playwright.sync_api import expect, sync_playwright
 
 from nopoach.app.main import create_app
+from nopoach.market.define import Employer
+from nopoach.signals.clauses import ClauseDocument, store_document
 from nopoach.store.workspace import Workspace
 from nopoach.synth.scenarios import named_scenario
 
@@ -94,6 +98,32 @@ def load_scenario(root, name):
     ]
     with Workspace.open(root) as workspace:
         helper(workspace, named_scenario(name))
+        if name == "AE1":
+            text = (
+                "Registered nurses shall not accept employment with a competitor "
+                "of Synthetic Amber Hospital for two years after termination."
+            )
+            receipt = workspace.provenance.append(
+                source="Synthetic employment agreement",
+                url="https://example.invalid/invented-agreement",
+                method="IMPORT",
+                body=text.encode(),
+            )
+            store_document(
+                workspace,
+                ClauseDocument(
+                    text,
+                    receipt,
+                    date(2020, 1, 2),
+                    "synthetic",
+                    Employer("hospital-a", "Synthetic Amber Hospital"),
+                    "invented-employment-agreement.txt",
+                ),
+                (
+                    Employer("hospital-a", "Synthetic Amber Hospital"),
+                    Employer("hospital-b", "Synthetic Birch Hospital"),
+                ),
+            )
 
 
 def define_and_run(page, root, occupation="29-1141"):
@@ -186,6 +216,10 @@ def test_planted_pair_dossier_import_and_partial_export(browser):
     page.wait_for_load_state("domcontentloaded")
     accessibility(page)
     page.screenshot(path=str(artifacts / "dossier.png"), full_page=False)
+    expect(page.get_by_text("Non-compete document evidence: Passed")).to_be_visible()
+    expect(page.get_by_text("Registered nurses shall not", exact=False)).to_be_visible()
+    if evidence_path := os.environ.get("NOPOACH_EVIDENCE_SCREENSHOT"):
+        page.locator("#explanations").screenshot(path=evidence_path)
     flow_data = page.locator("#flow-data-0")
     flow_data.get_by_text("Show the data", exact=True).click()
     observed = flow_data.locator("a[hx-get$='/moves?direction=0&year=2015']")

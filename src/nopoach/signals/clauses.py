@@ -61,6 +61,24 @@ _CARVEOUT = re.compile(
     r"unsolicited\s+(?:applications?|applicants?))[^.\n]*(?:\.|$)",
     re.I,
 )
+_NON_COMPETE = re.compile(
+    r"\b(?:Employees?|workers?|executives?|officers?|registered nurses?|nurses?|"
+    r"engineers?)\b"
+    r"[^.]{0,180}?\b(?:shall|will|agrees? to|must)\s+not\s+"
+    r"(?:directly\s+or\s+indirectly\s+)?(?:accept\s+employment|be\s+employed|"
+    r"provide\s+services|work|engage)\b[^.]{0,500}?(?:\.|$)",
+    re.I,
+)
+_NON_COMPETE_EXCLUSION = re.compile(
+    r"\b(?:customers?|clients?|confidential(?:ity| information)|franchisees?|"
+    r"sale of (?:the )?business)\b",
+    re.I,
+)
+_NON_COMPETE_EXCEPTION = re.compile(
+    r"[^.\n]*(?:passive investment|non[- ]competing (?:unit|business)|"
+    r"written consent|does not prohibit)[^.\n]*(?:\.|$)",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -97,6 +115,8 @@ class Clause:
     @property
     def pairs(self) -> tuple[tuple[str, str], ...]:
         """Form pairs locally, including visibly labeled one-sided evidence."""
+        if self.clause_type == "non_compete":
+            return ()
         return tuple(combinations(sorted(set(self.employer_ids)), 2))
 
 
@@ -329,6 +349,75 @@ def extract_clauses(
     return tuple(clauses)
 
 
+def extract_non_competes(
+    document: ClauseDocument, employers: Sequence[Employer]
+) -> tuple[Clause, ...]:
+    """Extract conservative worker non-compete evidence from canonical text.
+
+    Findings document worker obligations; they are deliberately not pair
+    clauses and make no claim about enforceability or workforce prevalence.
+    """
+    aliases = _aliases(document.text, employers)
+    findings: list[Clause] = []
+    for match in _NON_COMPETE.finditer(document.text):
+        sentence = match[0]
+        if _NON_COMPETE_EXCLUSION.search(sentence) and not re.search(
+            r"\b(?:compete|competitive|competitor)\b", sentence, re.I
+        ):
+            continue
+        if not re.search(r"\b(?:compete|competitive|competitor)\b", sentence, re.I):
+            continue
+        if re.search(r"\b(?:may|is permitted to)\s+(?:compete|work)\b", sentence, re.I):
+            continue
+        # Attribution must be explicit in the provision or a locally defined alias.
+        mentioned = _mentions(sentence, aliases)
+        if len(mentioned) != 1:
+            continue
+        employer = mentioned[0]
+        subject = re.search(
+            r"\b(registered nurses?|nurses?|software engineers?|engineers?|"
+            r"executives?|officers?|workers?|employees?)\b",
+            sentence,
+            re.I,
+        )
+        scope = subject[1].lower() if subject else None
+        duration_match = _DURATION.search(sentence)
+        duration = (duration_match[1] or duration_match[2]) if duration_match else None
+        exceptions = tuple(
+            m[0].strip() for m in _NON_COMPETE_EXCEPTION.finditer(sentence)
+        )
+        identifier = (
+            "noncompete:"
+            + sha256(
+                (
+                    f"{document.issuer.id}:{document.provenance.url}:"
+                    f"{document.provenance.sha256}:{document.document_name}:{match.start()}"
+                ).encode()
+            ).hexdigest()
+        )
+        findings.append(
+            Clause(
+                identifier,
+                sentence,
+                document.filed_on,
+                "non_compete",
+                (employer.name,),
+                (employer.id,),
+                (),
+                "unknown",
+                duration,
+                scope,
+                exceptions,
+                None,
+                document.document_name,
+                match.start(),
+                match.end(),
+                document.provenance,
+            )
+        )
+    return tuple(findings)
+
+
 def _initialize(workspace: Workspace) -> None:
     workspace.connection.execute(
         "CREATE TABLE IF NOT EXISTS clause_details ("
@@ -352,6 +441,7 @@ def store_document(
     """
     _initialize(workspace)
     clauses = extract_clauses(document, employers, franchisees=franchisees)
+    evidence = clauses + extract_non_competes(document, employers)
     filing_id = sha256(
         f"{document.issuer.id}:{document.provenance.url}:{document.provenance.sha256}".encode()
     ).hexdigest()
@@ -370,7 +460,7 @@ def store_document(
                 document.provenance.id,
             ],
         )
-        for clause in clauses:
+        for clause in evidence:
             existing = workspace.connection.execute(
                 "SELECT details_json FROM clause_details WHERE clause_id = ?",
                 [clause.id],
@@ -401,7 +491,21 @@ def store_document(
     except BaseException:
         workspace.connection.execute("ROLLBACK")
         raise
-    return tuple(stored)
+    return tuple(c for c in stored if c.clause_type != "non_compete")
+
+
+def non_competes(workspace: Workspace) -> tuple[Clause, ...]:
+    """Return stored non-compete findings without exposing them to scoring."""
+    if "clause_details" not in workspace.table_names():
+        return ()
+    return tuple(
+        clause
+        for (encoded,) in workspace.connection.execute(
+            "SELECT details_json FROM clause_details ORDER BY clause_id"
+        ).fetchall()
+        for clause in (_decode(encoded),)
+        if clause.clause_type == "non_compete"
+    )
 
 
 def _decode(encoded: str) -> Clause:
@@ -435,6 +539,8 @@ def score_pairs(
         "SELECT details_json FROM clause_details ORDER BY clause_id"
     ).fetchall():
         clause = _decode(encoded)
+        if clause.clause_type == "non_compete":
+            continue
         for pair in clause.pairs:
             buckets[pair_key(*pair)].append(clause)
     return tuple(

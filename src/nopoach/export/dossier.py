@@ -324,6 +324,19 @@ def export_dossier(
                 check.provenance_ids,
             )
         )
+        for item in check.evidence:
+            document.add_paragraph(item.clause.text, style="Quote")
+            details = (
+                f"{item.employer_name} · {item.clause.filed_on} · "
+                f"{item.clause.document_name} (characters {item.clause.start}–"
+                f"{item.clause.end}). Record: {item.clause.id}; receipt: "
+                f"{item.clause.provenance.id}; worker scope: "
+                f"{item.clause.scope or 'unknown'}; duration: "
+                f"{item.clause.duration or 'not stated'}; assessment: {item.reason}."
+            )
+            document.add_paragraph(details)
+            for exception in item.clause.carve_outs:
+                document.add_paragraph(f"Exception: {exception}")
     document.add_heading(wording.DOSSIER_HEADINGS["coverage"], level=1)
     _coverage(document, screen, pair)
     document.add_heading(wording.DOSSIER_HEADINGS["sources"], level=1)
