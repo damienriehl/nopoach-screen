@@ -9,6 +9,7 @@ import json
 import re
 from collections.abc import Iterable, Set
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from math import asin, cos, isfinite, radians, sin, sqrt
 from typing import TYPE_CHECKING, Literal
 
@@ -238,7 +239,14 @@ def scope_description(market: MarketDefinition) -> str:
 def scope_key(market: MarketDefinition) -> str:
     """Stable population scope, separate from period and confirmed member choices."""
     if isinstance(market, FlowDefinedMarket):
-        return f"flow:{market.population_id}"
+        population = json.dumps(
+            [
+                sorted(market.source_provenance_ids),
+                sorted(market.candidate_employer_ids),
+            ],
+            separators=(",", ":"),
+        ).encode()
+        return f"flow:{market.population_id}:{sha256(population).hexdigest()}"
     return f"{market.geography.kind}:{market.geography.code}:" + ",".join(
         sorted(market.occupation_codes)
     )

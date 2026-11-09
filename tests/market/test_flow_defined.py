@@ -18,6 +18,7 @@ from nopoach.market.define import (
     geodesic_km,
     market_from_json,
     scope_description,
+    scope_key,
 )
 from nopoach.signals.flow import ResolvedPosition, build_moves
 
@@ -117,6 +118,17 @@ def test_tagged_definition_keeps_universe_and_manual_edits():
     assert market_from_json(old.to_json()) == old
     with pytest.raises(ValueError):
         scope.edit_employers(add={"outside"})
+
+
+def test_review_scope_tracks_the_declared_population_not_its_label_or_selection():
+    scope = market()
+    assert scope_key(scope) == scope_key(scope.edit_employers(remove={"b"}))
+    assert scope_key(scope) != scope_key(
+        replace(scope, source_provenance_ids=frozenset({"different-records"}))
+    )
+    assert scope_key(scope) != scope_key(
+        replace(scope, candidate_employer_ids=scope.candidate_employer_ids | {"d"})
+    )
 
 
 def test_geodesic_distance_is_symmetric_and_handles_antimeridian():
