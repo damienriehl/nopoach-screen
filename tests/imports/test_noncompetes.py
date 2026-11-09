@@ -92,6 +92,23 @@ def test_complete_six_of_ten_and_duplicate_documents_count_workers_once():
     assert "worker_key" not in repr(result)
 
 
+def test_complete_positive_review_with_permissive_exception_remains_testable():
+    document = row()
+    document["text"] = (
+        "Employee shall not work for a competitor for 12 months following "
+        "termination of employment, except that Employee may work for a "
+        "competitor with written consent."
+    )
+    result = assess([document], {"a": 1})
+    (population,) = result.employers
+    assert population.complete and population.supported is True
+    assert population.numerator == population.denominator == 1
+    assert population.unresolved_workers == 0
+    assert result.candidates[0].exceptions == (
+        "except that Employee may work for a competitor with written consent",
+    )
+
+
 def test_conflicting_amendments_and_missing_applicability_are_unresolved():
     positive = row("same")
     negative = {**row("same", "negative"), "document_id": "amendment"}

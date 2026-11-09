@@ -962,7 +962,14 @@ def test_retained_analytical_versions_and_flow_confirmation(client, tmp_path):
     assert session.result is None
     response = client.get("/market?mode=flow")
     assert "Confirm group and run" in response.text
-    response = client.post("/market/flow/confirm", data={"group": "0", "add": "d"})
+    response = client.post(
+        "/market/flow/confirm",
+        data={
+            "group": "0",
+            "add": "d",
+            "proposal_digest": session.cluster_proposal.digest,
+        },
+    )
     assert response.status_code == 200
     response = wait_screen(client)
     assert session.result is not None
@@ -1289,3 +1296,227 @@ def test_collector_failure_with_new_result_does_not_label_it_prior(client, tmp_p
     assert not session.prior_result
     assert "Prior screen." not in response.text
     assert "Synthetic unavailable collector" in response.text
+
+
+def request_flow_review(client, population, groups=2):
+    assert (
+        client.post(
+            "/imports/analytical/select",
+            data={"kind": "flow_population", "bundle_id": population.bundle_id},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/market/flow/propose",
+            data={
+                "start_year": "2020",
+                "end_year": "2021",
+                "pre_start_year": "2015",
+                "pre_end_year": "2019",
+                "groups": str(groups),
+            },
+        ).status_code
+        == 200
+    )
+    wait_screen(client)
+    proposal = client.app.state.session.cluster_proposal
+    assert proposal.status == "fitted"
+    return proposal
+
+
+def test_corrupt_old_version_does_not_hide_or_block_healthy_selections(
+    client, tmp_path
+):
+    from nopoach.analytical_inputs import read_bundle
+    from nopoach.imports.noncompetes import import_contracts
+
+    root, market, _, public, damaged = analytical_workspace(client, tmp_path)
+    session = client.app.state.session
+    session.market = market
+    with Workspace.open(root) as workspace:
+        original = read_bundle(workspace, damaged)
+        healthy = import_contracts(
+            workspace,
+            original.body,
+            {**original.metadata, "source": "Synthetic replacement review"},
+        )
+        path = workspace.root / "analysis" / "inputs" / damaged.bundle_id / "raw.bin"
+        path.write_bytes(original.body + b"damaged")
+    response = client.get("/imports")
+    assert response.status_code == 200
+    assert "integrity" in response.text
+    assert healthy.bundle_id in response.text and public.bundle_id in response.text
+    for kind, ref in (("j2j", public), ("contracts", healthy)):
+        response = client.post(
+            "/imports/analytical/select",
+            data={"kind": kind, "bundle_id": ref.bundle_id},
+        )
+        assert response.status_code == 200
+        assert getattr(session.analytical_inputs, kind) == ref
+    response = client.post(
+        "/imports/analytical/select",
+        data={"kind": "contracts", "bundle_id": damaged.bundle_id},
+    )
+    assert response.status_code == 400
+    assert session.analytical_inputs.contracts == healthy
+
+
+def test_old_or_missing_proposal_identity_cannot_confirm_replacement(client, tmp_path):
+    from lxml import html
+
+    _, _, population, _, _ = analytical_workspace(client, tmp_path)
+    old = request_flow_review(client, population)
+    current = request_flow_review(client, population, groups=1)
+    assert old.digest != current.digest and old.groups[0] != current.groups[0]
+    session = client.app.state.session
+    market = session.market
+    with patch.object(session, "start") as start:
+        for posted in ({}, {"proposal_digest": old.digest}):
+            response = client.post(
+                "/market/flow/confirm", data={"group": "0", **posted}
+            )
+            assert response.status_code == 400
+            assert "proposal" in response.text.lower()
+            assert session.market is market
+            assert session.cluster_proposal is current
+            start.assert_not_called()
+    tree = html.fromstring(client.get("/market?mode=flow").text)
+    assert tree.xpath(
+        "//form[@action='/market/flow/confirm']/input[@name='proposal_digest']/@value"
+    ) == [current.digest]
+
+
+def test_invalid_ordinary_form_preserves_requested_mode_after_flow_review(
+    client, tmp_path
+):
+    _, _, population, _, _ = analytical_workspace(client, tmp_path)
+    request_flow_review(client, population)
+    session = client.app.state.session
+    previous = session.market
+    assert 'id="occupations"' in client.get("/market?mode=ordinary").text
+    response = client.post(
+        "/market",
+        data={
+            "occupations": "not-a-soc",
+            "geography_kind": "metro",
+            "geography_code": "00123",
+            "start_year": "2020",
+            "end_year": "2021",
+            "action": "propose",
+        },
+    )
+    assert response.status_code == 400
+    assert 'id="occupations"' in response.text
+    assert 'action="/market/flow/propose"' not in response.text
+    assert session.market is previous
+
+
+def test_confirmed_second_group_survives_reopening_and_resubmission(client, tmp_path):
+    from lxml import html
+
+    _, _, population, _, _ = analytical_workspace(client, tmp_path)
+    proposal = request_flow_review(client, population)
+    session = client.app.state.session
+    with patch.object(session, "start"):
+        response = client.post(
+            "/market/flow/confirm",
+            data={"group": "1", "proposal_digest": proposal.digest, "add": "a"},
+        )
+        assert response.status_code == 200
+        previous = session.market
+        tree = html.fromstring(client.get("/market?mode=flow").text)
+        selected = tree.xpath("//select[@name='group']/option[@selected]/@value")
+        assert selected == ["1"]
+        response = client.post(
+            "/market/flow/confirm",
+            data={
+                "group": selected[0],
+                "proposal_digest": proposal.digest,
+                "add": "a",
+            },
+        )
+        assert response.status_code == 200
+        assert session.market == previous
+        assert session.market.fitted_employer_ids == frozenset(proposal.groups[1])
+
+
+def test_concurrent_run_and_import_cannot_replace_a_running_jobs_inputs():
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import nullcontext
+    from pathlib import Path
+    from threading import Event
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse
+
+    from nopoach.analytical_inputs import BundleRef
+    from nopoach.app.routes import pages
+
+    entered, parsing, release_run, submitted = (Event() for _ in range(4))
+    queued = []
+
+    class Queue:
+        def submit(self, *args):
+            queued.append(args)
+            submitted.set()
+
+    session = pages.Session(
+        folder=Path("synthetic-unused-workspace"),
+        market=Market(frozenset({"29-1141"}), Geography("metro", "00123"), 2020, 2021),
+        executor=Queue(),
+        status="Defined",
+    )
+    app = FastAPI()
+    app.include_router(pages.router)
+    app.state.session = session
+    original_state = pages.state
+    ref = BundleRef("j2j", "a" * 64, "b" * 64)
+
+    def delayed_state(request):
+        if request.url.path == "/screen/run":
+            entered.set()
+            assert release_run.wait(10)
+        return original_state(request)
+
+    def imported(*args):
+        parsing.set()
+        release_run.set()
+        assert submitted.wait(10)
+        return ref
+
+    data = {"start_year": "2020", "end_year": "2021"}
+    data.update(start_quarter="1", end_quarter="4")
+    with (
+        patch.object(pages, "state", side_effect=delayed_state),
+        patch.object(
+            pages.Workspace, "open", return_value=nullcontext(SimpleNamespace())
+        ),
+        patch.object(pages, "import_j2j", side_effect=imported),
+        patch.object(pages, "page", return_value=HTMLResponse("ok")),
+        patch.object(pages, "import_page", return_value=HTMLResponse("ok")),
+        TestClient(app) as client,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        running = pool.submit(client.post, "/screen/run")
+        try:
+            assert entered.wait(5)
+            importing = pool.submit(
+                client.post,
+                "/imports/analytical/j2j",
+                data=data,
+                files={"file": ("synthetic.csv", b"synthetic", "text/csv")},
+            )
+            # A synchronous run handler lets publication enter this window;
+            # an event-loop handler keeps the import queued until submission.
+            parsing.wait(5)
+        finally:
+            release_run.set()
+        run_response = running.result(10)
+        import_response = importing.result(10)
+    assert run_response.status_code == 200
+    assert import_response.status_code == 409
+    assert len(queued) == 1 and queued[0][5] is None
+    assert session.analytical_inputs.j2j is None
+    assert session.status == "Collecting"

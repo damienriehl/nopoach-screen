@@ -21,7 +21,7 @@ from nopoach.analytical_inputs import (
     AnalyticalInputs,
     BundleRef,
     ClusterSettings,
-    list_bundles,
+    inspect_bundles,
     read_bundle,
 )
 from nopoach.collect.lehd import import_j2j
@@ -253,9 +253,10 @@ def page(
     if name == "imports.html" and session.folder and session.status != "Collecting":
         with Workspace.open(session.folder) as workspace:
             bundles = []
-            issues = []
+            issues: list[str] = []
             try:
-                inventory = list_bundles(workspace)
+                inventory, inventory_issues = inspect_bundles(workspace)
+                issues.extend(inventory_issues)
             except (ValueError, OSError) as exc:
                 inventory = ()
                 issues.append(f"Input inventory integrity check failed: {exc}")
@@ -421,7 +422,11 @@ async def define_market(request: Request) -> HTMLResponse:
                     workspace_estimates(workspace, market),
                 )
             return page(
-                request, "market.html", title="Confirm competitors", proposal=proposal
+                request,
+                "market.html",
+                title="Confirm competitors",
+                proposal=proposal,
+                flow_mode=False,
             )
         session.status = "Defined"
         session.start()
@@ -432,13 +437,14 @@ async def define_market(request: Request) -> HTMLResponse:
             title="Define the market",
             error=str(exc),
             proposal=None,
+            flow_mode=False,
             status_code=400,
         )
     return page(request, "progress.html", title="Screen progress")
 
 
 @router.post("/screen/run")
-def start_screen(request: Request) -> HTMLResponse:
+async def start_screen(request: Request) -> HTMLResponse:
     state(request).start()
     return page(request, "progress.html", title="Screen progress")
 
@@ -882,7 +888,7 @@ async def select_analytical(request: Request) -> HTMLResponse:
                 ref = next(
                     (
                         r
-                        for r in list_bundles(workspace)
+                        for r in inspect_bundles(workspace)[0]
                         if r.kind == kind and r.bundle_id == identifier
                     ),
                     None,
@@ -1034,6 +1040,10 @@ async def confirm_flow(request: Request) -> HTMLResponse:
             or not session.cluster_proposal
         ):
             raise ValueError("Request and review a flow proposal first")
+        if form.get("proposal_digest") != session.cluster_proposal.digest:
+            raise ValueError(
+                "This proposal changed. Review the current groups before confirming."
+            )
         market = confirm_group(
             session.cluster_proposal,
             replace(

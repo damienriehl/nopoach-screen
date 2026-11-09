@@ -26,6 +26,28 @@ def publish(workspace, body=b"document\r\n"):
     )
 
 
+def test_inventory_isolates_corrupt_versions_without_weakening_strict_reads(tmp_path):
+    from nopoach.analytical_inputs import inspect_bundles
+
+    with Workspace.open(tmp_path / "workspace") as workspace:
+        damaged = publish(workspace)
+        healthy = publish(workspace, b"healthy\r\n")
+        public = publish_bundle(
+            workspace, kind="j2j", body=b"synthetic public data", metadata={}
+        )
+        path = workspace.root / "analysis" / "inputs" / damaged.bundle_id / "raw.bin"
+        original = path.read_bytes()
+        path.write_bytes(original + b"damaged")
+        references, issues = inspect_bundles(workspace)
+        assert set(references) == {healthy, public}
+        assert len(issues) == 1
+        assert damaged.bundle_id in issues[0] and "integrity" in issues[0]
+        with pytest.raises(ValueError, match="integrity"):
+            read_bundle(workspace, damaged)
+        with pytest.raises(ValueError, match="integrity"):
+            list_bundles(workspace)
+
+
 def test_exact_content_metadata_receipts_and_settings_survive_reopen(tmp_path):
     folder = tmp_path / "workspace"
     with Workspace.open(folder) as workspace:

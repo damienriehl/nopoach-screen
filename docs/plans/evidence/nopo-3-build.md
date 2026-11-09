@@ -66,6 +66,39 @@ The six-employer synthetic fixtures used two groups, seed zero, four restarts,
 These are small-fixture measurements, not a benchmark of the 64-employer limit.
 The method reports a local optimum and explicit incomplete/unavailable results.
 
+## Simplification and review
+
+Two full-team simplification passes preserved the verification tests. The final
+pass reused invariant likelihood terms and named numerical operations; 30
+complete fitter outputs matched before and after, including likelihood histories
+and residuals. The subsequent full suite passed: 517 passed, 1 skipped and
+14 deselected in 118.76 seconds.
+
+The eight-lens local review covered correctness, testing, maintainability,
+security, performance, HTTP contracts, reliability and asynchronous UI behavior.
+An independent validator reproduced seven findings. The review fixes:
+
+- Keep healthy retained versions selectable beside explicit integrity warnings,
+  while preserving strict bundle reads and strict inventory validation.
+- Bind confirmation to the displayed proposal digest and retain the confirmed
+  group when reopening the form.
+- Keep ordinary-market validation errors in the ordinary form.
+- Serialize run submission with the existing event-loop mutation handlers.
+- Preserve a matched post-employment restriction when permissive language occurs
+  only in an exception; genuine operative negation stays nonpositive.
+- Add supported-graph boundary and intervening-job regressions without removing
+  the original test.
+
+Before the fixes, all five new route regressions failed, as did the new inventory,
+extractor and reviewed-population regressions. The added graph assertions failed
+under deliberate in-memory date-bound and bridging defects. After the fixes,
+all 112 focused tests passed, the 25 offline checks passed, and Ruff, formatting
+and strict mypy passed. An AST comparison confirmed that all 62 original test
+and helper definitions in changed baseline test files remain unchanged.
+
+No external cross-model review ran in this clone; checkout configuration
+disables it. The controller's campaign reviews remain part of publication.
+
 ## Delivery boundaries
 
 There are no schema migrations, data rewrites, new services or package releases.

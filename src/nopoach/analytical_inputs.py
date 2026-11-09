@@ -335,18 +335,33 @@ def read_bundle(workspace: Workspace, ref: BundleRef) -> AnalyticalBundle:
 def list_bundles(
     workspace: Workspace, *, kind: BundleKind | None = None
 ) -> tuple[BundleRef, ...]:
-    """Return only complete, verified publications; staging data is never selected."""
+    """List verified publications strictly, rejecting any inventory integrity error."""
+    references, issues = inspect_bundles(workspace, kind=kind)
+    if issues:
+        raise ValueError("; ".join(issues))
+    return references
+
+
+def inspect_bundles(
+    workspace: Workspace, *, kind: BundleKind | None = None
+) -> tuple[tuple[BundleRef, ...], tuple[str, ...]]:
+    """Return healthy references and visible per-version errors for recovery UIs."""
     if kind is not None and kind not in KINDS:
         raise ValueError("Unsupported analytical input kind")
     folder = _contained(workspace, "analysis", "inputs")
     if not folder.exists():
-        return ()
+        return (), ()
     result = []
+    issues = []
     for path in sorted(folder.iterdir()):
         if not re.fullmatch(r"[0-9a-f]{64}", path.name):
             continue
-        ref = _reference(workspace, path.name)
-        read_bundle(workspace, ref)
+        try:
+            ref = _reference(workspace, path.name)
+            read_bundle(workspace, ref)
+        except (ValueError, OSError) as exc:
+            issues.append(f"Input version {path.name} integrity check failed: {exc}")
+            continue
         if kind is None or ref.kind == kind:
             result.append(ref)
-    return tuple(result)
+    return tuple(result), tuple(issues)

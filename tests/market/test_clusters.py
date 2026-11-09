@@ -303,3 +303,85 @@ def test_confirmation_rejects_another_population_and_tampered_proposal():
         confirm_group(
             replace(proposal, groups=tuple(reversed(proposal.groups))), market, 0
         )
+
+
+def test_supported_training_graph_never_bridges_an_outside_spell():
+    from nopoach.market.clusters import training_graph
+
+    market, positions, report = fixture_network()
+    settings = ClusterSettings(2015, 2019)
+    baseline = training_graph(market, positions, report, settings)
+    origin = replace(positions[0], id="probe-old", person_id="probe")
+    destination = replace(
+        positions[1], id="probe-new", person_id="probe", start_date=date(2017, 3, 3)
+    )
+    middle = replace(
+        origin,
+        id="probe-middle",
+        employer_id="outside",
+        start_date=date(2017, 3, 2),
+        end_date=date(2017, 3, 2),
+    )
+    control = training_graph(
+        market, positions + (origin, destination), report, settings
+    )
+    interrupted = training_graph(
+        market, positions + (origin, middle, destination), report, settings
+    )
+    assert baseline.employers == tuple("abcdef")
+    assert control.move_count == baseline.move_count + 1
+    assert control.counts[0][1] == baseline.counts[0][1] + 1
+    assert interrupted.counts == baseline.counts
+    assert interrupted.move_count == baseline.move_count
+    assert interrupted.input_digest == baseline.input_digest
+
+
+@pytest.mark.parametrize("precision", ["day", "month", "year"])
+def test_supported_training_graph_excludes_a_move_crossing_the_start_boundary(
+    precision,
+):
+    from nopoach.market.clusters import training_graph
+    from nopoach.signals.flow import build_moves
+
+    market, positions, report = fixture_network()
+    settings = ClusterSettings(2015, 2019)
+    baseline = training_graph(market, positions, report, settings)
+    origin = replace(
+        positions[0],
+        id="boundary-old",
+        person_id="boundary",
+        start_date=date(2014, 1, 1),
+        end_date=date(2014, 12, 31),
+        end_precision=precision,
+    )
+    destination = replace(
+        positions[1],
+        id="boundary-new",
+        person_id="boundary",
+        start_date=date(2015, 1, 1),
+    )
+    pre = replace(market, start_year=2015, end_year=2019)
+    assert any(
+        move.person_id == "boundary"
+        for move in build_moves(pre, positions + (origin, destination))
+    )
+    crossing = training_graph(
+        market, positions + (origin, destination), report, settings
+    )
+    assert crossing.employers == tuple("abcdef")
+    assert crossing.counts == baseline.counts
+    assert crossing.move_count == baseline.move_count
+    assert crossing.input_digest == baseline.input_digest
+    control = training_graph(
+        market,
+        positions
+        + (
+            replace(origin, end_date=date(2015, 1, 1)),
+            replace(destination, start_date=date(2015, 1, 2)),
+        ),
+        report,
+        settings,
+    )
+    assert control.move_count == baseline.move_count + 1
+    assert control.counts[0][1] == baseline.counts[0][1] + 1
+    assert control.input_digest != baseline.input_digest

@@ -91,7 +91,15 @@ def extract_noncompetes(
             and _POST.search(sentence)
         ):
             continue
-        negated = bool(_NEGATED.search(sentence))
+        exception = _EXCEPTION.search(sentence)
+        operative = sentence[: exception.start()] if exception else sentence
+        independently_restricted = all(
+            pattern.search(operative)
+            for pattern in (_ACTOR, _COMPETITION, _ACTIVITY, _POST, _DUTY)
+        )
+        negated = bool(
+            _NEGATED.search(operative if independently_restricted else sentence)
+        )
         if not (_DUTY.search(sentence) or negated):
             continue
         if re.search(r"\bsolicit", sentence, re.I) and not re.search(

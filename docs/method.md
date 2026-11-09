@@ -220,7 +220,9 @@ the external workspace, under `analysis/inputs/`. Contract text also retains
 the normalized representation and transformation version. An accepted bundle
 is immutable; a replacement creates a separately selectable version. Hashes
 are checked before use. Invalid or interrupted imports do not replace a valid
-selection. The interface provides labeled declaration fields; users do not need
+selection. The import interface keeps healthy versions selectable when another
+version is damaged, and retains a visible integrity warning for the damaged
+version. The interface provides labeled declaration fields; users do not need
 to author a metadata JSON file.
 
 ### Flow-population workforce counts
@@ -366,6 +368,9 @@ dependent proposals and results. Changing public or contract inputs invalidates
 the result without changing the training graph. Failed imports preserve the
 previous valid selection. Retry and partial acceptance retain selected versions
 and recheck integrity; changed training inputs require another proposal review.
+Confirmation is tied to the proposal displayed in the form; a form left open
+from an older proposal cannot confirm its replacement. Reopening a current
+proposal retains the previously confirmed group and manual edits.
 If a failed run retains an older result, it is labeled as a prior screen and
 exports only that screen's evidence.
 
