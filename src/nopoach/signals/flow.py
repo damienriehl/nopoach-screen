@@ -27,7 +27,13 @@ import pyfixest as pf
 from scipy.special import xlogy  # type: ignore[import-untyped]
 
 from nopoach.market.coverage import CoverageReport
-from nopoach.market.define import Geography, Market, soc_code
+from nopoach.market.define import (
+    FlowDefinedMarket,
+    Geography,
+    MarketDefinition,
+    geodesic_km,
+    scope_contains,
+)
 from nopoach.market.sufficiency import signal_sufficiency
 from nopoach.signals.breaks import FlowBreak, break_candidates, detect_break
 from nopoach.signals.shrink import (
@@ -80,6 +86,7 @@ class FlowEmployer:
     id: str
     location_km: tuple[float, float]
     occupation_shares: Mapping[str, float]
+    geodesic: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,17 +151,21 @@ class FlowScreen:
     seed: int
 
 
-def _in_market(position: ResolvedPosition, market: Market) -> bool:
-    return bool(position.occupation_code) and (
-        soc_code(position.occupation_code) in market.occupation_codes
-        and position.geography == market.geography
-        and position.employer_id not in market.removed_employer_ids
-        and (market.employer_ids is None or position.employer_id in market.employer_ids)
+def _in_market(position: ResolvedPosition, market: MarketDefinition) -> bool:
+    return scope_contains(
+        market,
+        position.employer_id,
+        position.occupation_code,
+        position.geography,
+        position.provenance_id,
     )
 
 
 def build_moves(
-    market: Market, positions: Sequence[ResolvedPosition], *, max_gap_days: int = 90
+    market: MarketDefinition,
+    positions: Sequence[ResolvedPosition],
+    *,
+    max_gap_days: int = 90,
 ) -> tuple[PersonMove, ...]:
     """Successive spells only; excluded/out-of-market jobs cannot be bridged.
 
@@ -261,7 +272,7 @@ def _gravity(frame: Any) -> np.ndarray:
 
 
 def screen_flow(
-    market: Market,
+    market: MarketDefinition,
     positions: Sequence[ResolvedPosition],
     employers: Sequence[FlowEmployer],
     coverage: CoverageReport,
@@ -291,7 +302,11 @@ def screen_flow(
     for a, b in permutations(selected, 2):
         overlap = sum(
             min(a.occupation_shares.get(o, 0), b.occupation_shares.get(o, 0))
-            for o in market.occupation_codes
+            for o in (
+                a.occupation_shares.keys() | b.occupation_shares.keys()
+                if isinstance(market, FlowDefinedMarket)
+                else market.occupation_codes
+            )
         )
         for year in years:
             rows.append(
@@ -302,7 +317,11 @@ def screen_flow(
                     observed=len(counts.get((a.id, b.id, year), ())),
                     overlap=overlap,
                     log_overlap=log(overlap) if overlap else 0,
-                    distance_km=dist(a.location_km, b.location_km),
+                    distance_km=(
+                        geodesic_km(a.location_km, b.location_km)
+                        if a.geodesic and b.geodesic
+                        else dist(a.location_km, b.location_km)
+                    ),
                     origin_year=f"{a.id}:{year}",
                     destination_year=f"{b.id}:{year}",
                 )

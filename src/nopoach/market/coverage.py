@@ -20,7 +20,15 @@ from uuid import uuid4
 
 from nopoach.collect.bls import OewsRecord
 from nopoach.collect.dol import DolRecord, load_dol_records
-from nopoach.market.define import Employer, Geography, Market, soc_code
+from nopoach.market.define import (
+    Employer,
+    FlowDefinedMarket,
+    Geography,
+    Market,
+    MarketDefinition,
+    scope_contains,
+    soc_code,
+)
 from nopoach.store.workspace import Workspace
 
 COMPANY_ALLOCATION_UNCERTAINTY = 0.5
@@ -57,20 +65,25 @@ class WorkforceEstimate:
     employer_id: str
     year: int
     occupation_codes: frozenset[str]
-    geography: Geography
+    geography: Geography | None
     headcount: Headcount | None
+    population_id: str | None = None
 
 
 def matching_estimates(
-    market: Market, estimates: Iterable[WorkforceEstimate]
+    market: MarketDefinition, estimates: Iterable[WorkforceEstimate]
 ) -> dict[tuple[str, int], WorkforceEstimate]:
     result = {}
     for estimate in estimates:
-        if (
-            estimate.occupation_codes != market.occupation_codes
-            or estimate.geography != market.geography
-            or not market.start_year <= estimate.year <= market.end_year
-        ):
+        if isinstance(market, FlowDefinedMarket):
+            matches = estimate.population_id == market.population_id
+        else:
+            matches = (
+                estimate.population_id is None
+                and estimate.occupation_codes == market.occupation_codes
+                and estimate.geography == market.geography
+            )
+        if not matches or not market.start_year <= estimate.year <= market.end_year:
             continue
         key = estimate.employer_id, estimate.year
         if key in result:
@@ -193,8 +206,9 @@ class MarketWorker:
     person_id: str
     employer_id: str
     occupation_code: str
-    geography: Geography
+    geography: Geography | None
     year: int
+    provenance_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -231,13 +245,13 @@ class OverallCoverage:
 
 @dataclass(frozen=True)
 class CoverageReport:
-    market: Market
+    market: MarketDefinition
     employers: tuple[EmployerCoverage, ...]
     overall: tuple[OverallCoverage, ...]
 
 
 def coverage_report(
-    market: Market,
+    market: MarketDefinition,
     employers: Iterable[Employer],
     estimates: Iterable[WorkforceEstimate] | None = None,
     workers: Iterable[MarketWorker] = (),
@@ -262,15 +276,21 @@ def coverage_report(
     )
     if estimates is None:
         estimates = (
-            workspace_estimates(workspace, market, as_of=as_of) if workspace else ()
+            workspace_estimates(workspace, market, as_of=as_of)
+            if workspace and isinstance(market, Market)
+            else ()
         )
     known = matching_estimates(market, estimates)
     visible: dict[tuple[str, int], set[str]] = defaultdict(set)
     for worker in workers:
         if (
-            worker.occupation_code
-            and soc_code(worker.occupation_code) in market.occupation_codes
-            and worker.geography == market.geography
+            scope_contains(
+                market,
+                worker.employer_id,
+                worker.occupation_code,
+                worker.geography,
+                worker.provenance_id,
+            )
             and market.start_year <= worker.year <= market.end_year
         ):
             visible[worker.employer_id, worker.year].add(worker.person_id)
