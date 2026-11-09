@@ -111,6 +111,8 @@ def fit_partition(
         block.ravel(), weights=y.ravel(), minlength=k * k
     ).reshape(k, k)
     sending, receiving, rates = np.ones(n), np.ones(n), np.ones((k, k))
+    eligible_counts = y[mask]
+    log_factorials = gammaln(eligible_counts + 1)
 
     def expected() -> NDArray[np.float64]:
         return np.asarray(
@@ -118,7 +120,24 @@ def fit_partition(
         )
 
     def likelihood(mu: NDArray[np.float64]) -> float:
-        return float(np.sum(xlogy(y[mask], mu[mask]) - mu[mask] - gammaln(y[mask] + 1)))
+        eligible_means = mu[mask]
+        return float(
+            np.sum(
+                xlogy(eligible_counts, eligible_means) - eligible_means - log_factorials
+            )
+        )
+
+    def normalize_factor_scales() -> None:
+        for group in range(k):
+            indices = z == group
+            for factors, axis in ((sending, 0), (receiving, 1)):
+                mean = float(factors[indices].mean())
+                if mean > 0:
+                    factors[indices] /= mean
+                    if axis == 0:
+                        rates[group, :] *= mean
+                    else:
+                        rates[:, group] *= mean
 
     def scale(
         target: NDArray[np.float64], actual: NDArray[np.float64]
@@ -137,17 +156,7 @@ def fit_partition(
             block.ravel(), weights=mu.ravel(), minlength=k * k
         ).reshape(k, k)
         rates *= scale(block_counts, block_expected)
-        # Fix the redundant factor scale without changing any fitted dyad mean.
-        for group in range(k):
-            indices = z == group
-            for factors, axis in ((sending, 0), (receiving, 1)):
-                mean = float(factors[indices].mean())
-                if mean > 0:
-                    factors[indices] /= mean
-                    if axis == 0:
-                        rates[group, :] *= mean
-                    else:
-                        rates[:, group] *= mean
+        normalize_factor_scales()
         mu = expected()
         history.append(likelihood(mu))
         block_expected = np.bincount(
@@ -250,7 +259,6 @@ def training_graph(
         ):
             counts[move.source_id, move.destination_id] += 1
             retained.append(asdict(move))
-    # JSON identity uses event dates, not the collection date or later position ends.
     for evidence in retained:
         evidence["ended_on"] = evidence["ended_on"].isoformat()
         evidence["started_on"] = evidence["started_on"].isoformat()

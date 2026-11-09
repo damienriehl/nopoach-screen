@@ -1,5 +1,3 @@
-"""Frozen optional context and source-scoped covariates for saved screens."""
-
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -96,8 +94,7 @@ def population_references(ref: BundleRef, receipt_id: str) -> tuple[str, ...]:
     )
 
 
-def _centroid(points: set[tuple[float, float]]) -> tuple[float, float] | None:
-    # A spherical mean avoids fabricating an Atlantic centroid across the dateline.
+def _spherical_centroid(points: set[tuple[float, float]]) -> tuple[float, float] | None:
     x = fsum(cos(radians(lat)) * cos(radians(lon)) for lat, lon in points)
     y = fsum(cos(radians(lat)) * sin(radians(lon)) for lat, lon in points)
     z = fsum(sin(radians(lat)) for lat, _ in points)
@@ -195,7 +192,7 @@ def flow_explanation_inputs(
             if total
             else None
         )
-        centroid = _centroid(sites[identifier]) if sites[identifier] else None
+        centroid = _spherical_centroid(sites[identifier]) if sites[identifier] else None
         if centroid is None:
             omissions.append(
                 f"{employer.name}: no supported supplied worksite centroid; "
